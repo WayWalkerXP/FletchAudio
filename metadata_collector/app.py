@@ -65,8 +65,8 @@ def main(page: ft.Page):
         first=book.files[0]
         selected={}
         divider_color=ft.Colors.OUTLINE_VARIANT
-        row_border=ft.border.only(bottom=ft.BorderSide(1, divider_color))
-        column_border=ft.border.only(left=ft.BorderSide(1, divider_color))
+        row_border=ft.Border(bottom=ft.BorderSide(1, divider_color))
+        column_border=ft.Border(left=ft.BorderSide(1, divider_color))
 
         def is_present(value):
             if value is None:
