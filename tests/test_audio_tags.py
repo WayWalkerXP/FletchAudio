@@ -237,3 +237,24 @@ def test_write_audio_metadata_formats_mp3_genres(monkeypatch):
     write_audio_metadata('/tmp/book.mp3', {'genres': ['One', 'Two']})
 
     assert fake_audio.tags['TCON'][0].text == ['One\\\\Two']
+
+
+def test_write_audio_metadata_deletes_mp3_cover(monkeypatch):
+    from mutagen.id3 import APIC, ID3
+
+    class FakeAudio:
+        def __init__(self):
+            self.tags = ID3()
+            self.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Old', data=b'old'))
+            self.saved = False
+
+        def save(self):
+            self.saved = True
+
+    fake_audio = FakeAudio()
+    monkeypatch.setattr('metadata_collector.audio_tags.File', lambda path, easy=False: fake_audio)
+
+    write_audio_metadata('/tmp/book.mp3', {'delete_cover': True})
+
+    assert fake_audio.tags.getall('APIC') == []
+    assert fake_audio.saved is True
