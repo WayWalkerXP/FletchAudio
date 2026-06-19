@@ -13,7 +13,7 @@ from .audio_scan import scan_directory
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
 from .history import create_change_group, log_changes, store_snapshot
 from .metadata_map import normalize_response
-from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, sorted_manual_edit_files
+from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, sorted_manual_edit_files
 logging.basicConfig(level=logging.INFO)
 
 def main(page: ft.Page):
@@ -306,8 +306,10 @@ def main(page: ft.Page):
         return register_page_service(picker)
     def show_manual_edit(book):
         edit_files=sorted_manual_edit_files(book.files) if book.is_folder_book else list(book.files)
+        files_by_path={file_meta.path: file_meta for file_meta in edit_files}
         selected_file={'meta': edit_files[0]}
-        baseline_values={'values': build_baseline_values(edit_files[0])}
+        selected_file_path={'path': edit_files[0].path}
+        baseline_values={'values': {}}
         controls={}
         current_cells={}
         file_buttons={}
@@ -353,9 +355,12 @@ def main(page: ft.Page):
                 cover_preview.controls.append(ft.Text('Missing'))
                 cover_note.value=''
             cover_preview.controls.append(cover_note)
-        def load_file(meta):
+        def load_selected_file(file_path):
+            meta=files_by_path[file_path]
+            normalized_baseline=normalize_for_dirty_check(build_baseline_values(meta))
+            baseline_values['values']=dict(normalized_baseline)
             selected_file['meta']=meta
-            baseline_values['values']=build_baseline_values(meta)
+            selected_file_path['path']=file_path
             for field, control in controls.items():
                 value=baseline_values['values'].get(field, '')
                 if isinstance(control, ft.Checkbox):
@@ -374,7 +379,9 @@ def main(page: ft.Page):
             cover_state.delete=False
             refresh_cover_preview()
             for file_meta_path, button in file_buttons.items():
-                button.bgcolor=selected_row_bg if file_meta_path == meta.path else None
+                button.bgcolor=selected_row_bg if file_meta_path == selected_file_path['path'] else None
+            dirty=has_unsaved_changes()
+            logging.info('Loaded file %s; dirty=%s', file_path, dirty)
             page.update()
         def on_cover_selected(e):
             files=getattr(e, 'files', None) or []
@@ -436,7 +443,7 @@ def main(page: ft.Page):
                     close_dialog(dialog)
                     render()
                 else:
-                    load_file(meta)
+                    load_selected_file(meta.path)
                     show_success('Metadata changes saved.')
                     show_status('Metadata changes saved.')
                     save_button.disabled=False
@@ -451,19 +458,19 @@ def main(page: ft.Page):
                 show_status(f'Failed to save manual metadata for {meta.path}: {exc}')
                 return False
         def request_file_switch(next_meta):
-            if next_meta is current_file():
+            if next_meta.path == selected_file_path['path']:
                 return
             if not has_unsaved_changes():
-                load_file(next_meta)
+                load_selected_file(next_meta.path)
                 return
             unsaved_dialog=None
             async def save_then_switch(_):
                 close_dialog(unsaved_dialog)
                 if await save_selected(close_after=False):
-                    load_file(next_meta)
+                    load_selected_file(next_meta.path)
             def discard_then_switch(_):
                 close_dialog(unsaved_dialog)
-                load_file(next_meta)
+                load_selected_file(next_meta.path)
             unsaved_dialog=ft.AlertDialog(
                 modal=True,
                 title=ft.Text('Unsaved changes'),
@@ -547,6 +554,7 @@ def main(page: ft.Page):
                 file_buttons[file_meta.path]=btn
                 file_rows.append(btn)
             content=ft.Row([ft.Container(content=ft.Column(file_rows, scroll=ft.ScrollMode.AUTO), width=260, height=560, border=ft.Border(right=ft.BorderSide(1, divider_color))), form], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START)
+        load_selected_file(edit_files[0].path)
         dialog=ft.AlertDialog(
             title=ft.Column([ft.Text('Edit Metadata'), ft.Text(book.display_name, size=12, selectable=True)]),
             content=content,
