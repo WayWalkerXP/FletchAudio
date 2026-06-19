@@ -65,6 +65,8 @@ def normalize_manual_value(field: str, value: Any) -> Any:
         return str(value).strip().upper()
     if field == 'genres':
         return format_genres_for_tag(value) or ''
+    if field == 'description':
+        return str(value).replace('\r\n', '\n').replace('\r', '\n').strip()
     if field == 'published_year':
         text = str(value).strip()
         if text and not re.fullmatch(r'\d{4}', text):
@@ -97,6 +99,8 @@ def build_manual_metadata_diff(current: AudioFileMetadata, edited: dict[str, Any
         current_value = manual_current_value(current, field)
         if field in BOOLEAN_FIELDS:
             current_value = getattr(current, field, None)
+        else:
+            current_value = normalize_manual_value(field, current_value)
         if normalized != current_value:
             updates[field] = normalized
     if cover_state:
@@ -126,15 +130,19 @@ def manual_edit_file_label(meta: AudioFileMetadata) -> str:
     return f'{meta.track}. {filename}' if meta.track is not None else filename
 
 
-def build_current_metadata_values(file_metadata: AudioFileMetadata) -> dict[str, Any]:
+def build_baseline_values(file_metadata: AudioFileMetadata) -> dict[str, Any]:
     return {field: manual_current_value(file_metadata, field) for field, _ in MANUAL_EDIT_TAGS if field != 'cover'}
+
+
+def build_current_metadata_values(file_metadata: AudioFileMetadata) -> dict[str, Any]:
+    return build_baseline_values(file_metadata)
 
 
 def build_edit_form_values(values: dict[str, Any]) -> dict[str, Any]:
     return dict(values)
 
 
-def normalize_for_dirty_check(values: dict[str, Any]) -> dict[str, Any]:
+def normalize_edit_values(values: dict[str, Any]) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
     for field, value in values.items():
         if field in NON_WRITABLE_FIELDS or field == 'cover':
@@ -143,15 +151,27 @@ def normalize_for_dirty_check(values: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def manual_changed_fields(current: AudioFileMetadata, edited: dict[str, Any], cover_state: CoverEditState | None = None) -> dict[str, tuple[Any, Any]]:
-    baseline = normalize_for_dirty_check(build_current_metadata_values(current))
-    edited_normalized = normalize_for_dirty_check(build_edit_form_values(edited))
-    changed = {field: (baseline.get(field, ''), edited_normalized.get(field, '')) for field in sorted(set(baseline) | set(edited_normalized)) if baseline.get(field, '') != edited_normalized.get(field, '')}
+def normalize_for_dirty_check(values: dict[str, Any]) -> dict[str, Any]:
+    return normalize_edit_values(values)
+
+
+def changed_edit_fields(baseline: dict[str, Any], edited: dict[str, Any], cover_state: CoverEditState | None = None) -> dict[str, tuple[Any, Any]]:
+    baseline_normalized = normalize_edit_values(baseline)
+    edited_normalized = normalize_edit_values(build_edit_form_values(edited))
+    changed = {field: (baseline_normalized.get(field, ''), edited_normalized.get(field, '')) for field in sorted(set(baseline_normalized) | set(edited_normalized)) if baseline_normalized.get(field, '') != edited_normalized.get(field, '')}
     if cover_state and cover_state.delete:
         changed['delete_cover'] = (False, True)
     elif cover_state and cover_state.path:
         changed['cover_path'] = ('', cover_state.path)
     return changed
+
+
+def has_unsaved_changes(baseline: dict[str, Any], edited: dict[str, Any], cover_state: CoverEditState | None = None) -> bool:
+    return bool(changed_edit_fields(baseline, edited, cover_state))
+
+
+def manual_changed_fields(current: AudioFileMetadata, edited: dict[str, Any], cover_state: CoverEditState | None = None) -> dict[str, tuple[Any, Any]]:
+    return changed_edit_fields(build_baseline_values(current), edited, cover_state)
 
 
 def has_manual_unsaved_changes(current: AudioFileMetadata, edited: dict[str, Any], cover_state: CoverEditState | None = None) -> bool:

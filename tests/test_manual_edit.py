@@ -2,13 +2,17 @@ import pytest
 
 from metadata_collector.manual_edit import (
     CoverEditState,
+    build_baseline_values,
     build_current_metadata_values,
     build_manual_metadata_diff,
+    changed_edit_fields,
     filter_manual_updates_for_file,
+    has_unsaved_changes,
     has_manual_unsaved_changes,
     manual_changed_fields,
     manual_current_value,
     manual_edit_file_label,
+    normalize_edit_values,
     should_switch_manual_file,
     sorted_manual_edit_files,
 )
@@ -103,6 +107,26 @@ def test_manual_edit_detects_unsaved_text_and_cover_changes():
     assert not has_manual_unsaved_changes(current, {'title': 'Old'}, CoverEditState())
     assert has_manual_unsaved_changes(current, {'title': 'New'}, CoverEditState())
     assert has_manual_unsaved_changes(current, {'title': 'Old'}, CoverEditState(delete=True))
+
+
+def test_new_dirty_helpers_compare_normalized_baseline_and_edit_values():
+    current = AudioFileMetadata('/tmp/book.mp3', title=' Chapter 01 ', description='Line 1\r\nLine 2', genres=['One', 'Two'], explicit=False, track=1)
+    baseline = build_baseline_values(current)
+    edited = dict(baseline)
+    edited.update({'title': 'Chapter 01', 'description': 'Line 1\nLine 2', 'genres': r'One\\Two', 'explicit': False, 'track': '1'})
+
+    assert normalize_edit_values(baseline) == normalize_edit_values(edited)
+    assert changed_edit_fields(baseline, edited, CoverEditState()) == {}
+    assert not has_unsaved_changes(baseline, edited, CoverEditState())
+
+
+def test_new_dirty_helpers_ignore_unchanged_cover_preview_and_detect_cover_actions():
+    current = AudioFileMetadata('/tmp/book.mp3', title='Old', cover_data_uri='data:image/jpeg;base64,old')
+    baseline = build_baseline_values(current)
+
+    assert not has_unsaved_changes(baseline, {'title': 'Old'}, CoverEditState())
+    assert has_unsaved_changes(baseline, {'title': 'Old'}, CoverEditState(path='/tmp/new.jpg'))
+    assert has_unsaved_changes(baseline, {'title': 'Old'}, CoverEditState(delete=True))
 
 
 def test_folder_manual_edit_files_sort_by_track_then_filename():
