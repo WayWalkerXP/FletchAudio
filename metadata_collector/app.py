@@ -10,8 +10,9 @@ from .config import load_settings, save_settings
 from .db import init_db, get_session_factory
 from .audio_scan import scan_directory
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
-from .history import store_snapshot
+from .history import create_change_group, log_changes, store_snapshot
 from .metadata_map import normalize_response
+from .manual_edit import CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_manual_metadata_diff, filter_manual_updates_for_file, manual_current_value
 logging.basicConfig(level=logging.INFO)
 
 def main(page: ft.Page):
@@ -282,12 +283,156 @@ def main(page: ft.Page):
         async def handler(_):
             await search_by_asin(book)
         return handler
+    def create_file_picker(on_result):
+        picker=ft.FilePicker(on_result=on_result)
+        if hasattr(page, 'overlay'):
+            page.overlay.append(picker)
+        page.update()
+        return picker
+    def show_manual_edit(book):
+        first=book.files[0]
+        current_cover_file=next((file for file in book.files if file.cover_data_uri), first)
+        controls={}
+        cover_state=CoverEditState()
+        cover_preview=ft.Column(spacing=6)
+        cover_note=ft.Text('', color=ft.Colors.RED)
+        current_cover=ft.Image(src=current_cover_file.cover_data_uri, width=64, height=64, fit=IMAGE_CONTAIN_FIT) if current_cover_file.cover_data_uri else ft.Text('Missing', width=120)
+        divider_color=ft.Colors.OUTLINE_VARIANT
+        row_border=ft.Border(bottom=ft.BorderSide(1, divider_color))
+        column_border=ft.Border(left=ft.BorderSide(1, divider_color))
+        def cell(content, width, border=None, padding=8):
+            if isinstance(content, str):
+                content=ft.Text(content, selectable=True, width=width - (padding * 2), no_wrap=False)
+            return ft.Container(content=content, width=width, padding=padding, border=border)
+        def refresh_cover_preview():
+            cover_preview.controls.clear()
+            if cover_state.delete:
+                if current_cover_file.cover_data_uri:
+                    cover_preview.controls.append(ft.Image(src=current_cover_file.cover_data_uri, width=64, height=64, fit=IMAGE_CONTAIN_FIT, opacity=0.35))
+                cover_note.value='Cover will be removed.'
+            elif cover_state.path:
+                cover_preview.controls.append(ft.Image(src=cover_state.path, width=96, height=96, fit=IMAGE_CONTAIN_FIT))
+                cover_note.value=f'Selected: {cover_state.path}'
+            elif current_cover_file.cover_data_uri:
+                cover_preview.controls.append(ft.Image(src=current_cover_file.cover_data_uri, width=64, height=64, fit=IMAGE_CONTAIN_FIT))
+                cover_note.value=''
+            else:
+                cover_preview.controls.append(ft.Text('Missing'))
+                cover_note.value=''
+            cover_preview.controls.append(cover_note)
+        def on_cover_selected(e):
+            files=getattr(e, 'files', None) or []
+            if files:
+                cover_state.path=files[0].path
+                cover_state.delete=False
+                refresh_cover_preview()
+                page.update()
+        cover_picker=create_file_picker(on_cover_selected)
+        def choose_cover(_):
+            cover_picker.pick_files(allow_multiple=False, allowed_extensions=['jpg', 'jpeg', 'png', 'webp'])
+        def delete_cover(_):
+            cover_state.path=None
+            cover_state.delete=True
+            refresh_cover_preview()
+            page.update()
+        def edit_control(field):
+            value=manual_current_value(first, field)
+            if field == 'description':
+                control=ft.TextField(value=str(value), multiline=True, min_lines=3, max_lines=6, width=320)
+            elif field in {'explicit', 'dramatic_audio'}:
+                control=ft.Checkbox(value=bool(value) if value is not None and value != '' else False)
+            else:
+                control=ft.TextField(value=str(value), width=320)
+            controls[field]=control
+            return control
+        refresh_cover_preview()
+        header=ft.Row([
+            cell(ft.Text('Tag', weight=ft.FontWeight.BOLD), 170),
+            cell(ft.Text('Edit', weight=ft.FontWeight.BOLD), 380, column_border),
+            cell(ft.Text('Current', weight=ft.FontWeight.BOLD), 300, column_border),
+        ], spacing=0)
+        rows=[header]
+        for field, label in MANUAL_EDIT_TAGS:
+            if field == 'cover':
+                edit=ft.Column([
+                    cover_preview,
+                    ft.Row([
+                        ft.IconButton(icon=ft.Icons.ADD_PHOTO_ALTERNATE, tooltip='Change cover', on_click=choose_cover),
+                        ft.IconButton(icon=ft.Icons.CLOSE, tooltip='Delete cover', icon_color=ft.Colors.RED, on_click=delete_cover),
+                    ], spacing=4),
+                ], spacing=4)
+                current=current_cover
+            else:
+                edit=edit_control(field)
+                current=str(manual_current_value(first, field))
+            rows.append(ft.Container(content=ft.Row([
+                cell(ft.Text(label, weight=ft.FontWeight.W_500), 170),
+                cell(edit, 380, column_border),
+                cell(current, 300, column_border),
+            ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START), border=row_border))
+        def revert(_):
+            for field, control in controls.items():
+                value=manual_current_value(first, field)
+                if isinstance(control, ft.Checkbox):
+                    control.value=bool(value) if value is not None and value != '' else False
+                else:
+                    control.value=str(value)
+            cover_state.path=None
+            cover_state.delete=False
+            refresh_cover_preview()
+            page.update()
+        async def save(_):
+            save_button.disabled=True
+            page.update()
+            saving_dialog=ft.AlertDialog(modal=True, title=ft.Text('Saving metadata changes...'), content=ft.Column([ft.ProgressRing(), ft.Text('Writing tags. Please wait...')], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER))
+            open_dialog(saving_dialog)
+            await asyncio.sleep(0.1)
+            try:
+                edited={field: control.value for field, control in controls.items()}
+                updates=build_manual_metadata_diff(first, edited, cover_state)
+                updates=filter_manual_updates_for_file(book.is_folder_book, updates)
+                if not updates:
+                    close_dialog(saving_dialog)
+                    save_button.disabled=False
+                    show_status('No manual metadata changes to save.')
+                    page.update()
+                    return
+                with Session() as session:
+                    group=create_change_group(session, book.key, MANUAL_EDIT_SOURCE_TYPE, 'Manual metadata edit')
+                    for file_metadata in book.files:
+                        file_updates=filter_manual_updates_for_file(book.is_folder_book, updates)
+                        if not file_updates:
+                            continue
+                        changes={tag: (manual_current_value(file_metadata, 'cover') if tag in {'cover_path', 'delete_cover'} else getattr(file_metadata, tag, None), new) for tag, new in file_updates.items()}
+                        write_audio_metadata(file_metadata.path, file_updates)
+                        refreshed=read_audio_metadata(file_metadata.path)
+                        file_metadata.__dict__.update(refreshed.__dict__)
+                        log_changes(session, group, book.key, file_metadata.path, changes, MANUAL_EDIT_SOURCE_TYPE)
+                    session.commit()
+                close_dialog(saving_dialog)
+                close_dialog(dialog)
+                show_success('Metadata changes saved.')
+                show_status('Metadata changes saved.')
+                render()
+            except Exception as exc:
+                close_dialog(saving_dialog)
+                save_button.disabled=False
+                page.update()
+                error_dialog=ft.AlertDialog(modal=True, title=ft.Text('Could not save metadata'), content=ft.Text(f'Failed to save metadata for {book.display_name}: {exc}'), actions=[ft.TextButton('OK', on_click=lambda e: close_dialog(error_dialog))])
+                open_dialog(error_dialog)
+                show_status(f'Failed to save manual metadata for {book.display_name}: {exc}')
+        dialog=ft.AlertDialog(
+            title=ft.Column([ft.Text('Edit Metadata'), ft.Text(book.display_name, size=12, selectable=True)]),
+            content=ft.Column(rows, scroll=ft.ScrollMode.AUTO, height=560, width=860, spacing=0),
+            actions=[ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog)), ft.TextButton('Revert', on_click=revert), (save_button := ft.FilledButton('Save', on_click=save))],
+        )
+        open_dialog(dialog)
     def render():
         grid.controls.clear()
         for b in books:
             first=b.files[0]
             header_controls = [
-                ft.Text(b.display_name, width=220),
+                ft.Row([ft.IconButton(icon=ft.Icons.EDIT, tooltip='Edit metadata', on_click=lambda e, book=b: show_manual_edit(book)), ft.Text(b.display_name, width=190)], width=240, spacing=0),
                 ft.Text(first.title or '', width=150),
                 ft.Text(first.author or '', width=120),
                 ft.Text(first.narrator or '', width=120),

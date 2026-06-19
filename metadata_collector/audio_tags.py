@@ -84,6 +84,15 @@ def _int_part(v):
         return int(normalized.split('/')[0]) if normalized else None
     except Exception: return None
 
+def _tag_int(value):
+    try:
+        text=str(value).strip()
+        if not text:
+            return None
+        return int(text.split('/')[0])
+    except Exception:
+        return None
+
 def _text(tags,*keys):
     for k in keys:
         if tags and k in tags:
@@ -100,16 +109,32 @@ def _mime_from_image_data(data, fallback=None):
     return fallback or 'image/jpeg'
 
 def _cover_format(mime_type):
-    return MP4Cover.FORMAT_PNG if mime_type == 'image/png' else MP4Cover.FORMAT_JPEG
+    if mime_type == 'image/png':
+        return MP4Cover.FORMAT_PNG
+    if mime_type == 'image/webp':
+        raise ValueError('WebP covers are not supported for MP4/M4B files')
+    return MP4Cover.FORMAT_JPEG
 
-def _download_cover(url):
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    data = response.content
+def _read_cover_source(source):
+    text = str(source)
+    if text.startswith(('http://', 'https://')):
+        response = requests.get(text, timeout=30)
+        response.raise_for_status()
+        data = response.content
+        content_type = (response.headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
+    else:
+        with open(text, 'rb') as cover_file:
+            data = cover_file.read()
+        lowered = text.lower()
+        if lowered.endswith('.png'):
+            content_type = 'image/png'
+        elif lowered.endswith('.webp'):
+            content_type = 'image/webp'
+        else:
+            content_type = 'image/jpeg'
     if not data:
-        raise ValueError('Downloaded cover image was empty')
-    content_type = (response.headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
-    if content_type not in {'image/jpeg', 'image/jpg', 'image/png'}:
+        raise ValueError('Cover image was empty')
+    if content_type not in {'image/jpeg', 'image/jpg', 'image/png', 'image/webp'}:
         content_type = _mime_from_image_data(data)
     if content_type == 'image/jpg':
         content_type = 'image/jpeg'
@@ -163,7 +188,7 @@ def diff_metadata(current: AudioFileMetadata, updates: dict) -> dict:
     return {k:v for k,v in normalized_updates.items() if k not in NON_WRITABLE_FIELDS and v not in (None, []) and hasattr(current,k) and (format_genres_for_tag(getattr(current,k)) if k == 'genres' else getattr(current,k))!=v}
 
 def write_audio_metadata(path: str, updates: dict):
-    updates={k:(format_genres_for_tag(v) if k == 'genres' else v) for k,v in updates.items() if k not in NON_WRITABLE_FIELDS}
+    updates={k:(format_genres_for_tag(v) if k == 'genres' else v) for k,v in updates.items() if k not in NON_WRITABLE_FIELDS and k != 'cover'}
     if not updates:
         return
     audio=File(path, easy=False)
@@ -172,20 +197,30 @@ def write_audio_metadata(path: str, updates: dict):
         tags=audio.tags or {}; audio.tags=tags
         mapping={'title':'©nam','album':'©alb','author':'©ART','albumartist':'aART','narrator':'©wrt','description':'desc','published_date':'©day','genres':'©gen'}
         for k,v in updates.items():
-            if k == 'cover_url':
-                cover_data, mime_type = _download_cover(str(v))
+            if k == 'delete_cover':
+                tags.pop('covr', None)
+            elif k in {'cover_url', 'cover_path'}:
+                cover_data, mime_type = _read_cover_source(v)
                 tags['covr'] = [MP4Cover(cover_data, imageformat=_cover_format(mime_type))]
             elif k in mapping: tags[mapping[k]]=v if isinstance(v,list) else [str(v)]
             elif k in {'series','series_sequence','asin','publisher','language','explicit','dramatic_audio'}: tags[f'----:com.apple.iTunes:{k.upper()}']=[MP4FreeForm(str(v).encode())]
-            elif k=='track': tags['trkn']=[(int(v),0)]
-            elif k=='disc': tags['disk']=[(int(v),0)]
+            elif k=='track':
+                parsed=_tag_int(v)
+                if parsed is None: tags.pop('trkn', None)
+                else: tags['trkn']=[(parsed,0)]
+            elif k=='disc':
+                parsed=_tag_int(v)
+                if parsed is None: tags.pop('disk', None)
+                else: tags['disk']=[(parsed,0)]
     else:
         if audio.tags is None: audio.add_tags()
         tags=audio.tags
         frame={'title':TIT2,'album':TALB,'author':TPE1,'albumartist':TPE2,'narrator':TCOM,'publisher':TPUB,'published_date':TDRC,'genres':TCON,'track':TRCK,'disc':TPOS}
         for k,v in updates.items():
-            if k == 'cover_url':
-                cover_data, mime_type = _download_cover(str(v))
+            if k == 'delete_cover':
+                tags.delall('APIC')
+            elif k in {'cover_url', 'cover_path'}:
+                cover_data, mime_type = _read_cover_source(v)
                 tags.delall('APIC')
                 tags.add(APIC(encoding=3, mime=mime_type, type=3, desc='Cover', data=cover_data))
             elif k in frame: tags.setall(frame[k].__name__, [frame[k](encoding=3, text=[str(v)])])
