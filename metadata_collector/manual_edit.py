@@ -131,7 +131,7 @@ def manual_edit_file_label(meta: AudioFileMetadata) -> str:
 
 
 def build_baseline_values(file_metadata: AudioFileMetadata) -> dict[str, Any]:
-    return {field: manual_current_value(file_metadata, field) for field, _ in MANUAL_EDIT_TAGS if field != 'cover'}
+    return normalize_edit_values({field: manual_current_value(file_metadata, field) for field, _ in MANUAL_EDIT_TAGS if field != 'cover'})
 
 
 def build_current_metadata_values(file_metadata: AudioFileMetadata) -> dict[str, Any]:
