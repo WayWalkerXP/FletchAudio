@@ -20,6 +20,15 @@ def main(page: ft.Page):
     status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); url_launcher=ft.UrlLauncher(); audible=AudibleClient()
     def show_status(message: str):
         status.value=message; page.update()
+    def show_success(message: str):
+        snack_bar = ft.SnackBar(ft.Text(message))
+        open_control = getattr(page, 'open', None)
+        if open_control:
+            open_control(snack_bar)
+            return
+        page.snack_bar = snack_bar
+        snack_bar.open = True
+        page.update()
 
     def open_dialog(dialog):
         show_dialog = getattr(page, 'show_dialog', None)
@@ -165,30 +174,22 @@ def main(page: ft.Page):
             ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START), border=row_border))
         async def apply_selected(_):
             apply_button.disabled=True
-            saving_text=ft.Text('Writing tags. Please wait...')
-            continue_button=ft.TextButton('Close - saving...', disabled=True)
             saving_dialog=ft.AlertDialog(
                 modal=True,
                 title=ft.Text('Saving metadata changes...'),
-                content=ft.Column([ft.ProgressRing(), saving_text], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                actions=[continue_button],
+                content=ft.Column([
+                    ft.ProgressRing(),
+                    ft.Text('Writing tags. Please wait...'),
+                ], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             )
 
-            def finish_save_dialog(_):
-                close_dialog(saving_dialog)
-                close_dialog(dialog)
-                render()
-
-            continue_button.on_click=finish_save_dialog
             open_dialog(saving_dialog)
             page.update()
-            # TODO: Remove this temporary debug delay after verifying the saving dialog renders.
-            await asyncio.sleep(1.75)
+            # Yield to Flet so the modal is sent to the client before the synchronous tag write starts.
+            await asyncio.sleep(0.1)
             updates={field: downloaded for field, _, downloaded, _, _ in specs if field not in NON_WRITABLE_FIELDS and selected.get(field) and selected[field].value and is_present(downloaded)}
             if not updates:
-                saving_text.value='Save complete.'
-                continue_button.text='Continue'
-                continue_button.disabled=False
+                close_dialog(saving_dialog)
                 apply_button.disabled=False
                 page.update()
                 show_status('No downloaded metadata fields selected to apply.')
@@ -198,15 +199,23 @@ def main(page: ft.Page):
                     write_audio_metadata(file_metadata.path, updates)
                     refreshed=read_audio_metadata(file_metadata.path)
                     file_metadata.__dict__.update(refreshed.__dict__)
-                saving_text.value='Save complete.'
-                continue_button.text='Continue'
-                continue_button.disabled=False
-                page.update()
+                close_dialog(saving_dialog)
+                close_dialog(dialog)
+                show_success('Metadata changes saved.')
                 show_status('Metadata changes saved.')
+                render()
             except Exception as exc:
                 close_dialog(saving_dialog)
                 apply_button.disabled=False
-                error_dialog=ft.AlertDialog(modal=True, title=ft.Text('Could not save metadata'), content=ft.Text(f'Failed to apply metadata to {book.display_name}: {exc}'), actions=[ft.TextButton('OK', on_click=lambda e: close_dialog(error_dialog))])
+                error_dialog=ft.AlertDialog(
+                    modal=True,
+                    title=ft.Text('Could not save metadata'),
+                    content=ft.Text(f'Failed to apply metadata to {book.display_name}: {exc}'),
+                    actions=[
+                        ft.TextButton('Retry', on_click=lambda e: close_dialog(error_dialog)),
+                        ft.TextButton('Cancel', on_click=lambda e: (close_dialog(error_dialog), close_dialog(dialog))),
+                    ],
+                )
                 open_dialog(error_dialog)
                 show_status(f'Failed to apply Audible metadata to {book.display_name}: {exc}')
         title='Audible metadata comparison'
