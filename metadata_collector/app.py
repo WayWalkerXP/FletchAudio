@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 
 import flet as ft
@@ -283,8 +284,9 @@ def main(page: ft.Page):
         async def handler(_):
             await search_by_asin(book)
         return handler
-    def create_file_picker(on_result):
-        picker=ft.FilePicker(on_result=on_result)
+    def create_file_picker(on_result=None):
+        file_picker_params=inspect.signature(ft.FilePicker).parameters
+        picker=ft.FilePicker(on_result=on_result) if 'on_result' in file_picker_params else ft.FilePicker()
         if hasattr(page, 'overlay'):
             page.overlay.append(picker)
         page.update()
@@ -328,8 +330,15 @@ def main(page: ft.Page):
                 refresh_cover_preview()
                 page.update()
         cover_picker=create_file_picker(on_cover_selected)
-        def choose_cover(_):
-            cover_picker.pick_files(allow_multiple=False, allowed_extensions=['jpg', 'jpeg', 'png', 'webp'])
+        async def choose_cover(_):
+            files=cover_picker.pick_files(allow_multiple=False, allowed_extensions=['jpg', 'jpeg', 'png', 'webp'])
+            if inspect.isawaitable(files):
+                files=await files
+            if files:
+                cover_state.path=files[0].path
+                cover_state.delete=False
+                refresh_cover_preview()
+                page.update()
         def delete_cover(_):
             cover_state.path=None
             cover_state.delete=True
