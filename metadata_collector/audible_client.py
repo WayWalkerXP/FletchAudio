@@ -8,6 +8,32 @@ BASE_URL='https://api.audible.com/1.0/catalog/products'
 SEARCH_RESPONSE_GROUPS='contributors,media,product_desc,product_attrs,product_extended_attrs,series'
 ASIN_RESPONSE_GROUPS='category_ladders,contributors,media,product_desc,product_attrs,product_extended_attrs,rating,series,product_details'
 
+ASIN_PATTERN=re.compile(r'^[A-Z0-9]{10}$')
+
+
+def normalize_asin(asin: str | None) -> str:
+    return (asin or '').strip().upper()
+
+
+def validate_asin(asin: str | None) -> tuple[bool, str | None]:
+    clean=normalize_asin(asin)
+    if not clean:
+        return False, 'ASIN is required.'
+    if not ASIN_PATTERN.fullmatch(clean):
+        return False, 'ASIN must be 10 alphanumeric characters.'
+    return True, None
+
+
+def product_from_asin_response(response_json: dict) -> dict | None:
+    if not isinstance(response_json, dict):
+        raise ValueError('Malformed Audible response: expected an object.')
+    product=response_json.get('product', response_json)
+    if not isinstance(product, dict):
+        raise ValueError('Malformed Audible response: product is not an object.')
+    if not product or product.get('asin') in (None, ''):
+        return None
+    return product
+
 @dataclass
 class AudibleSearchResult:
     title: str | None = None
@@ -101,6 +127,8 @@ class AudibleClient:
     def search(self, author: str|None, title_or_album: str|None):
         r=self.session.get(BASE_URL, params=search_params(build_title_author_query(author,title_or_album)), timeout=self.timeout); r.raise_for_status(); return r.json()
     def lookup_asin(self, asin: str):
-        clean=(asin or '').strip();
-        if not clean: raise ValueError('ASIN is required')
+        clean=normalize_asin(asin)
+        valid, error=validate_asin(clean)
+        if not valid:
+            raise ValueError(error)
         r=self.session.get(f'{BASE_URL}/{clean}', params=asin_params(), timeout=self.timeout); r.raise_for_status(); return r.json()

@@ -79,3 +79,28 @@ def test_folder_book_runtime_equals_sum_of_child_durations():
 
     assert source_duration == 180
     assert runtime_difference_minutes(source_duration, 3) == 0
+
+from metadata_collector.audible_client import normalize_asin, product_from_asin_response, validate_asin
+
+
+def test_asin_normalization_strips_whitespace_and_uppercases():
+    assert normalize_asin('  b00test123  ') == 'B00TEST123'
+
+
+def test_blank_asin_is_invalid():
+    valid, error = validate_asin('   ')
+
+    assert valid is False
+    assert error == 'ASIN is required.'
+
+
+def test_malformed_asin_is_invalid():
+    valid, error = validate_asin('B00-TOO-LONG')
+
+    assert valid is False
+    assert error == 'ASIN must be 10 alphanumeric characters.'
+
+
+def test_asin_lookup_response_returns_single_product_or_none():
+    assert product_from_asin_response({'product': {'asin': 'B00TEST123', 'title': 'Book'}})['title'] == 'Book'
+    assert product_from_asin_response({'product': {}}) is None
