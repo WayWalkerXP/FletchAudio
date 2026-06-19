@@ -99,6 +99,13 @@ def _text(tags,*keys):
             return normalize_tag_value(tags[k])
     return None
 
+def _bool_text(value):
+    text = str(value or '').strip().lower()
+    if text in {'true', 'yes', '1', 'on'}:
+        return True
+    if text in {'false', 'no', '0', 'off'}:
+        return False
+    return None
 
 
 def _mime_from_image_data(data, fallback=None):
@@ -173,11 +180,11 @@ def read_audio_metadata(path: str) -> AudioFileMetadata:
         m.publisher=_text(tags,'----:com.apple.iTunes:PUBLISHER'); m.published_date=_text(tags,'©day'); m.published_year=(m.published_date or '')[:4] or None
         m.language=_text(tags,'----:com.apple.iTunes:LANGUAGE'); m.series=_text(tags,'----:com.apple.iTunes:SERIES'); m.series_sequence=_text(tags,'----:com.apple.iTunes:SERIES-PART','----:com.apple.iTunes:series_part')
         m.asin=_text(tags,'----:com.apple.iTunes:ASIN'); genre=normalize_tag_value(tags.get('©gen')); m.genres=genre.split(', ') if genre else []; m.track=(tags.get('trkn') or [(None,None)])[0][0]; m.disc=(tags.get('disk') or [(None,None)])[0][0]
-        m.has_cover='covr' in tags; m.cover_data_uri=_mp4_cover_data_uri(tags); m.dramatic_audio=(_text(tags,'----:com.apple.iTunes:dramatic_audio') or '').lower()=='true'
+        m.has_cover='covr' in tags; m.cover_data_uri=_mp4_cover_data_uri(tags); m.explicit=_bool_text(_text(tags,'----:com.apple.iTunes:EXPLICIT','----:com.apple.iTunes:explicit')); m.dramatic_audio=_bool_text(_text(tags,'----:com.apple.iTunes:DRAMATIC_AUDIO','----:com.apple.iTunes:dramatic_audio'))
     else:
         m.title=_text(tags,'TIT2'); m.album=_text(tags,'TALB'); m.author=_text(tags,'TPE1'); m.albumartist=_text(tags,'TPE2'); m.narrator=_text(tags,'TCOM') or _text(tags,'TXXX:NARRATOR')
         m.description=_text(tags,'COMM::XXX','COMM'); m.publisher=_text(tags,'TPUB'); m.published_date=_text(tags,'TDRC'); m.published_year=(m.published_date or '')[:4] or None
-        m.language=_text(tags,'TLAN'); m.series=_text(tags,'TXXX:SERIES'); m.series_sequence=_text(tags,'TXXX:SERIES-PART','TXXX:series_part'); m.asin=_text(tags,'TXXX:ASIN')
+        m.language=_text(tags,'TLAN'); m.series=_text(tags,'TXXX:SERIES'); m.series_sequence=_text(tags,'TXXX:SERIES-PART','TXXX:series_part'); m.asin=_text(tags,'TXXX:ASIN'); m.explicit=_bool_text(_text(tags,'TXXX:EXPLICIT','TXXX:explicit')); m.dramatic_audio=_bool_text(_text(tags,'TXXX:DRAMATIC_AUDIO','TXXX:dramatic_audio'))
         g=_text(tags,'TCON'); m.genres=g.split(', ') if g else []; m.track=_int_part(_text(tags,'TRCK')); m.disc=_int_part(_text(tags,'TPOS')); m.has_cover=any(str(k).startswith('APIC') for k in tags.keys()); m.cover_data_uri=_id3_cover_data_uri(tags)
     return m
 
