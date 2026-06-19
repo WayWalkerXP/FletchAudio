@@ -6,6 +6,12 @@ import flet as ft
 
 IMAGE_CONTAIN_FIT = getattr(getattr(ft, 'ImageFit', None) or ft.BoxFit, 'CONTAIN')
 
+def padding_symmetric(*, horizontal=0, vertical=0):
+    return ft.Padding(left=horizontal, right=horizontal, top=vertical, bottom=vertical)
+
+def padding_only(*, left=0, right=0, top=0, bottom=0):
+    return ft.Padding(left=left, right=right, top=top, bottom=bottom)
+
 from .audible_client import AudibleClient, build_title_author_query, normalize_asin, parse_search_results, product_from_asin_response, runtime_difference_minutes, sort_results_by_runtime_match, validate_asin
 from .config import load_settings, save_settings
 from .db import init_db, get_session_factory
@@ -798,7 +804,7 @@ def main(page: ft.Page):
                 content=ft.Text(text, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS, tooltip=tooltip or text, weight=weight),
                 width=width,
                 expand=expand,
-                padding=ft.padding.symmetric(horizontal=4),
+                padding=padding_symmetric(horizontal=4),
                 alignment=ft.Alignment(-1, 0),
             )
 
@@ -859,20 +865,20 @@ def main(page: ft.Page):
                     text_cell('Yes' if file_meta.has_cover else 'No', width=100),
                     text_cell('Yes' if file_meta.dramatic_audio else 'No', width=120),
                 ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                padding=ft.padding.only(left=56, right=12, top=6, bottom=6),
+                padding=padding_only(left=56, right=12, top=6, bottom=6),
             )
 
         for b in books:
             first=b.files[0]
             card_content=ft.Column([
                 book_top_row(b, first),
-                ft.Container(content=book_actions_row(b), padding=ft.padding.only(left=52, top=8)),
+                ft.Container(content=book_actions_row(b), padding=padding_only(left=52, top=8)),
             ], spacing=4)
             if b.is_folder_book and b.key in expanded_book_keys:
                 card_content.controls.append(
                     ft.Container(
                         content=ft.Column([child_file_row(f, i) for i, f in enumerate(b.files)], spacing=2),
-                        padding=ft.padding.only(top=8),
+                        padding=padding_only(top=8),
                     )
                 )
             grid.controls.append(
