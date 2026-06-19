@@ -1,5 +1,8 @@
 import logging
+
 import flet as ft
+
+from .audible_client import asin_url, build_title_author_query, search_url
 from .config import load_settings, save_settings
 from .db import init_db, get_session_factory
 from .audio_scan import scan_directory
@@ -10,11 +13,44 @@ def main(page: ft.Page):
     engine=init_db(); Session=get_session_factory(engine); settings=load_settings(); books=[]
     page.title='FletchAudio'; page.theme_mode={'Light':ft.ThemeMode.LIGHT,'Dark':ft.ThemeMode.DARK}.get(settings.get('theme'), ft.ThemeMode.SYSTEM)
     status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True)
+    def show_status(message: str):
+        status.value=message; page.update()
+    def search_by_title_author(book):
+        first=book.files[0]
+        query=build_title_author_query(first.author, first.title or first.album or book.display_name)
+        if not query:
+            show_status(f'Cannot search {book.display_name}: missing title/album and author metadata.')
+            return
+        page.launch_url(search_url(query))
+        show_status(f'Opened Audible title/author search for: {query}')
+    def search_by_asin(book):
+        first=book.files[0]
+        asin=(first.asin or '').strip()
+        if not asin:
+            show_status(f'Cannot search {book.display_name}: missing ASIN metadata.')
+            return
+        page.launch_url(asin_url(asin))
+        show_status(f'Opened Audible ASIN lookup for: {asin}')
     def render():
         grid.controls.clear()
         for b in books:
             first=b.files[0]
-            header=ft.Row([ft.Text(b.display_name, width=220), ft.Text(first.title or '', width=150), ft.Text(first.author or '', width=120), ft.Text(first.narrator or '', width=120), ft.Text(first.series or '', width=100), ft.Text(first.series_sequence or '', width=70), ft.Text(first.asin or '', width=90), ft.Text(f'Tracks: {len(b.files)}'), ft.ElevatedButton('Restore / Review History'), ft.ElevatedButton('Search Title+Author'), ft.ElevatedButton('Search ASIN')]+([ft.ElevatedButton('Mass Update')] if b.is_folder_book else []), wrap=True)
+            header_controls = [
+                ft.Text(b.display_name, width=220),
+                ft.Text(first.title or '', width=150),
+                ft.Text(first.author or '', width=120),
+                ft.Text(first.narrator or '', width=120),
+                ft.Text(first.series or '', width=100),
+                ft.Text(first.series_sequence or '', width=70),
+                ft.Text(first.asin or '', width=90),
+                ft.Text(f'Tracks: {len(b.files)}'),
+                ft.ElevatedButton('Restore / Review History'),
+                ft.ElevatedButton('Search by Title + Author', on_click=lambda _, book=b: search_by_title_author(book)),
+                ft.ElevatedButton('Search by ASIN', on_click=lambda _, book=b: search_by_asin(book)),
+            ]
+            if b.is_folder_book:
+                header_controls.append(ft.ElevatedButton('Mass Update'))
+            header=ft.Row(header_controls, wrap=True)
             if b.is_folder_book:
                 grid.controls.append(ft.ExpansionTile(title=header, controls=[ft.Text(f'Track {f.track or i+1} - {f.path} | title={f.title or ""} album={f.album or ""} disc={f.disc or ""} cover={f.has_cover} dramatic_audio={f.dramatic_audio}') for i,f in enumerate(b.files)]))
             else: grid.controls.append(header)
