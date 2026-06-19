@@ -13,6 +13,7 @@ from .audio_scan import scan_directory
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
 from .history import create_change_group, log_changes, metadata_diff, store_snapshot
 from .metadata_map import normalize_response
+from .maintenance import compact_database, format_bytes
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
 logging.basicConfig(level=logging.INFO)
 
@@ -672,6 +673,18 @@ def main(page: ft.Page):
                 grid.controls.append(ft.ExpansionTile(title=header, controls=[ft.Text(f'Track {f.track or i+1} - {f.path} | title={f.title or ""} album={f.album or ""} disc={f.disc or ""} cover={f.has_cover} dramatic_audio={f.dramatic_audio}') for i,f in enumerate(b.files)]))
             else: grid.controls.append(header)
         page.update()
+
+    def compact_database_handler(_):
+        show_status('Compacting database...')
+        try:
+            result = compact_database(engine, Session)
+        except Exception as exc:
+            show_status(f'Database compact failed: {exc}')
+            return
+        before = format_bytes(result.get('before_size_bytes'))
+        after = format_bytes(result.get('after_size_bytes'))
+        show_success(f'Compacted database: {before} → {after}. Cleaned {result.get("snapshots", 0)} snapshots and {result.get("changes", 0)} change records.')
+        show_status(f'Database compacted: {before} → {after}.')
     def apply_theme(e):
         settings['theme']=theme.value; save_settings(settings); page.theme_mode={'Light':ft.ThemeMode.LIGHT,'Dark':ft.ThemeMode.DARK}.get(theme.value, ft.ThemeMode.SYSTEM); page.update()
     theme=ft.Dropdown(label='Theme', value=settings.get('theme','System'), options=[ft.dropdown.Option(x) for x in ['System','Light','Dark']])
@@ -692,6 +705,6 @@ def main(page: ft.Page):
         status.value=f'Found {len(books)} books.' + (f' {len(errors)} scan warnings logged.' if errors else '')
         for err in errors: logging.warning(err)
         render()
-    page.add(ft.Row([ft.Button('Select Working Directory', on_click=select_working_directory), ft.Button('Rescan', on_click=lambda _: scan()), theme]), status, grid)
+    page.add(ft.Row([ft.Button('Select Working Directory', on_click=select_working_directory), ft.Button('Rescan', on_click=lambda _: scan()), ft.Button('Compact Database', on_click=compact_database_handler), theme]), status, grid)
     if settings.get('working_directory'): scan(settings['working_directory'])
 if __name__ == '__main__': ft.run(main)
