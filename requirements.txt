@@ -1,0 +1,5 @@
+flet>=0.23
+SQLAlchemy>=2.0
+mutagen>=1.47
+requests>=2.31
+pytest>=8.0
