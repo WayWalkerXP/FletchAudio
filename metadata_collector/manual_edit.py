@@ -65,7 +65,22 @@ def manual_current_value(meta: AudioFileMetadata, field: str) -> Any:
     return value
 
 
+def normalize_boolean_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    if text in {'', 'false', '0', 'no', 'n', 'off', 'unchecked'}:
+        return False
+    if text in {'true', '1', 'yes', 'y', 'on', 'checked'}:
+        return True
+    return bool(value)
+
+
 def normalize_manual_value(field: str, value: Any) -> Any:
+    if field in BOOLEAN_FIELDS:
+        return normalize_boolean_value(value)
     if value is None:
         return ''
     if field == 'asin':
@@ -81,15 +96,6 @@ def normalize_manual_value(field: str, value: Any) -> Any:
         return text
     if field in {'track', 'disc'}:
         return str(value).strip()
-    if field in BOOLEAN_FIELDS:
-        if isinstance(value, bool):
-            return value
-        text = str(value).strip().lower()
-        if text in {'true', 'yes', '1', 'on'}:
-            return True
-        if text in {'false', 'no', '0', 'off'}:
-            return False
-        return '' if text == '' else value
     if isinstance(value, str):
         return value.strip()
     return value
@@ -104,10 +110,7 @@ def build_manual_metadata_diff(current: AudioFileMetadata, edited: dict[str, Any
             continue
         normalized = normalize_manual_value(field, value)
         current_value = manual_current_value(current, field)
-        if field in BOOLEAN_FIELDS:
-            current_value = getattr(current, field, None)
-        else:
-            current_value = normalize_manual_value(field, current_value)
+        current_value = normalize_manual_value(field, current_value)
         if normalized != current_value:
             updates[field] = normalized
     if cover_state:
@@ -169,7 +172,7 @@ def debug_dirty_check(baseline: dict[str, Any], edited: dict[str, Any]) -> None:
     edited_keys = set(edited_normalized)
     only_baseline = baseline_keys - edited_keys
     only_edited = edited_keys - baseline_keys
-    changed_fields = [field for field in sorted(baseline_keys | edited_keys) if baseline_normalized.get(field, '') != edited_normalized.get(field, '')]
+    changed_fields = [field for field in sorted(baseline_keys | edited_keys) if baseline_normalized.get(field, normalized_default_value(field)) != edited_normalized.get(field, normalized_default_value(field))]
 
     print('DIRTY CHECK DEBUG')
     print(f'selected_file_path={DEBUG_SELECTED_FILE_PATH}')
@@ -188,18 +191,26 @@ def debug_dirty_check(baseline: dict[str, Any], edited: dict[str, Any]) -> None:
         print('  No dirty fields detected.')
         return
     for field in changed_fields:
-        baseline_value = baseline_normalized.get(field, '')
-        edited_value = edited_normalized.get(field, '')
+        baseline_value = baseline_normalized.get(field, normalized_default_value(field))
+        edited_value = edited_normalized.get(field, normalized_default_value(field))
         print(f'  {field}:')
         print(f'    baseline={baseline_value!r} {type(baseline_value)!r}')
         print(f'    edited={edited_value!r} {type(edited_value)!r}')
         print()
 
 
+def normalized_default_value(field: str) -> Any:
+    return False if field in BOOLEAN_FIELDS else ''
+
+
 def changed_edit_fields(baseline: dict[str, Any], edited: dict[str, Any], cover_state: CoverEditState | None = None) -> dict[str, tuple[Any, Any]]:
     baseline_normalized = normalize_edit_values(baseline)
     edited_normalized = normalize_edit_values(build_edit_form_values(edited))
-    changed = {field: (baseline_normalized.get(field, ''), edited_normalized.get(field, '')) for field in sorted(set(baseline_normalized) | set(edited_normalized)) if baseline_normalized.get(field, '') != edited_normalized.get(field, '')}
+    changed = {
+        field: (baseline_normalized.get(field, normalized_default_value(field)), edited_normalized.get(field, normalized_default_value(field)))
+        for field in sorted(set(baseline_normalized) | set(edited_normalized))
+        if baseline_normalized.get(field, normalized_default_value(field)) != edited_normalized.get(field, normalized_default_value(field))
+    }
     if cover_state and cover_state.delete:
         changed['delete_cover'] = (False, True)
     elif cover_state and cover_state.path:
