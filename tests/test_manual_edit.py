@@ -2,9 +2,11 @@ import pytest
 
 from metadata_collector.manual_edit import (
     CoverEditState,
+    build_current_metadata_values,
     build_manual_metadata_diff,
     filter_manual_updates_for_file,
     has_manual_unsaved_changes,
+    manual_changed_fields,
     manual_current_value,
     manual_edit_file_label,
     should_switch_manual_file,
@@ -86,6 +88,15 @@ def test_folder_manual_updates_exclude_file_level_title_track_disc():
     assert filter_manual_updates_for_file(True, updates) == {'album': 'Album'}
 
 
+def test_manual_dirty_check_normalizes_unchanged_form_values():
+    current = AudioFileMetadata('/tmp/book.mp3', title='Old', author=None, genres=['One', 'Two'], explicit=False, dramatic_audio=True)
+    edited = {'title': ' Old ', 'author': '', 'genres': r'One\\Two', 'explicit': False, 'dramatic_audio': True}
+
+    assert build_current_metadata_values(current)['genres'] == r'One\\Two'
+    assert manual_changed_fields(current, edited, CoverEditState()) == {}
+    assert not has_manual_unsaved_changes(current, edited, CoverEditState())
+
+
 def test_manual_edit_detects_unsaved_text_and_cover_changes():
     current = AudioFileMetadata('/tmp/book.mp3', title='Old', has_cover=True, cover_data_uri='data:image/jpeg;base64,old')
 
@@ -104,6 +115,12 @@ def test_folder_manual_edit_files_sort_by_track_then_filename():
 
     assert [file.path for file in sorted_manual_edit_files(files)] == ['/book/01.mp3', '/book/02.mp3', '/book/a.mp3', '/book/b.mp3']
     assert manual_edit_file_label(files[2]) == '1. 01.mp3'
+
+
+def test_manual_edit_file_label_uses_filename_for_windows_paths():
+    file = AudioFileMetadata(r'C:\\AB_Test\\Book\\CD 01 - The Hunt For Atlantis.mp3')
+
+    assert manual_edit_file_label(file) == 'CD 01 - The Hunt For Atlantis.mp3'
 
 
 def test_switching_with_no_unsaved_changes_switches_without_save():

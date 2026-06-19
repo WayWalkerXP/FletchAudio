@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path, PureWindowsPath
 from dataclasses import dataclass
 from typing import Any
 
@@ -81,7 +82,7 @@ def normalize_manual_value(field: str, value: Any) -> Any:
             return False
         return '' if text == '' else value
     if isinstance(value, str):
-        return value.strip() if field in {'published_date', 'language'} else value
+        return value.strip()
     return value
 
 
@@ -119,12 +120,42 @@ def sorted_manual_edit_files(files: list[AudioFileMetadata]) -> list[AudioFileMe
 
 
 def manual_edit_file_label(meta: AudioFileMetadata) -> str:
-    filename = meta.path.rsplit('/', 1)[-1]
+    filename = Path(meta.path).name
+    if '\\' in filename:
+        filename = PureWindowsPath(meta.path).name
     return f'{meta.track}. {filename}' if meta.track is not None else filename
 
 
+def build_current_metadata_values(file_metadata: AudioFileMetadata) -> dict[str, Any]:
+    return {field: manual_current_value(file_metadata, field) for field, _ in MANUAL_EDIT_TAGS if field != 'cover'}
+
+
+def build_edit_form_values(values: dict[str, Any]) -> dict[str, Any]:
+    return dict(values)
+
+
+def normalize_for_dirty_check(values: dict[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for field, value in values.items():
+        if field in NON_WRITABLE_FIELDS or field == 'cover':
+            continue
+        normalized[field] = normalize_manual_value(field, value)
+    return normalized
+
+
+def manual_changed_fields(current: AudioFileMetadata, edited: dict[str, Any], cover_state: CoverEditState | None = None) -> dict[str, tuple[Any, Any]]:
+    baseline = normalize_for_dirty_check(build_current_metadata_values(current))
+    edited_normalized = normalize_for_dirty_check(build_edit_form_values(edited))
+    changed = {field: (baseline.get(field, ''), edited_normalized.get(field, '')) for field in sorted(set(baseline) | set(edited_normalized)) if baseline.get(field, '') != edited_normalized.get(field, '')}
+    if cover_state and cover_state.delete:
+        changed['delete_cover'] = (False, True)
+    elif cover_state and cover_state.path:
+        changed['cover_path'] = ('', cover_state.path)
+    return changed
+
+
 def has_manual_unsaved_changes(current: AudioFileMetadata, edited: dict[str, Any], cover_state: CoverEditState | None = None) -> bool:
-    return bool(build_manual_metadata_diff(current, edited, cover_state))
+    return bool(manual_changed_fields(current, edited, cover_state))
 
 
 def should_switch_manual_file(has_unsaved_changes: bool, decision: str | None) -> tuple[bool, bool]:

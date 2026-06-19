@@ -13,7 +13,7 @@ from .audio_scan import scan_directory
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
 from .history import create_change_group, log_changes, store_snapshot
 from .metadata_map import normalize_response
-from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_manual_metadata_diff, filter_manual_updates_for_file, has_manual_unsaved_changes, manual_current_value, manual_edit_file_label, sorted_manual_edit_files
+from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_manual_metadata_diff, filter_manual_updates_for_file, manual_changed_fields, manual_current_value, manual_edit_file_label, sorted_manual_edit_files
 logging.basicConfig(level=logging.INFO)
 
 def main(page: ft.Page):
@@ -442,7 +442,9 @@ def main(page: ft.Page):
         def request_file_switch(next_meta):
             if next_meta is current_file():
                 return
-            if not has_manual_unsaved_changes(current_file(), edited_values(), cover_state):
+            changed_fields=manual_changed_fields(current_file(), edited_values(), cover_state)
+            logging.debug('Manual edit dirty check for %s: changed fields=%s', current_file().path, changed_fields)
+            if not changed_fields:
                 load_file(next_meta)
                 return
             unsaved_dialog=None
@@ -489,7 +491,7 @@ def main(page: ft.Page):
         if book.is_folder_book:
             file_rows=[]
             for file_meta in edit_files:
-                btn=ft.Container(content=ft.Text(manual_edit_file_label(file_meta), selectable=True, no_wrap=False), padding=8, width=240, bgcolor=selected_row_bg if file_meta is current_file() else None, on_click=lambda e, meta=file_meta: request_file_switch(meta))
+                btn=ft.Container(content=ft.Text(manual_edit_file_label(file_meta), selectable=False, no_wrap=False), padding=8, width=240, bgcolor=selected_row_bg if file_meta is current_file() else None, on_click=lambda e, meta=file_meta: request_file_switch(meta), ink=True)
                 file_buttons[file_meta.path]=btn
                 file_rows.append(btn)
             content=ft.Row([ft.Container(content=ft.Column(file_rows, scroll=ft.ScrollMode.AUTO), width=260, height=560, border=ft.Border(right=ft.BorderSide(1, divider_color))), form], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START)
