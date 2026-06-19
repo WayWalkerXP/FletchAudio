@@ -237,14 +237,13 @@ def main(page: ft.Page):
             actions=[ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog)), (apply_button := ft.FilledButton('Confirm / Apply', on_click=apply_selected))],
         )
         open_dialog(dialog)
-    async def search_by_title_author(book):
-        first=book.files[0]
-        query=build_title_author_query(first.author, first.title or first.album or book.display_name)
+    async def search_by_title_author(book, author, title_or_album):
+        query=build_title_author_query(author, title_or_album)
         if not query:
-            show_status(f'Cannot search {book.display_name}: missing title/album and author metadata.')
+            show_status(f'Cannot search {book.display_name}: missing title metadata.')
             return
         try:
-            response=audible.search(first.author, first.title or first.album or book.display_name)
+            response=audible.search(author, title_or_album)
         except Exception as exc:
             show_status(f'Audible title/author search failed for {book.display_name}: {exc}')
             return
@@ -315,9 +314,43 @@ def main(page: ft.Page):
             actions=[ft.FilledButton('Search', on_click=submit), ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog))],
         )
         open_dialog(dialog)
+    async def confirm_title_author_search(book):
+        first=book.files[0]
+        title_field=ft.TextField(label='Title', value=first.title or first.album or book.display_name, autofocus=True, width=420)
+        author_field=ft.TextField(label='Author', value=first.author or first.albumartist or '', width=420)
+        error_text=ft.Text('', color=ft.Colors.RED)
+        warning_text=ft.Text('', color=ft.Colors.AMBER)
+        dialog=None
+        async def submit(_):
+            title=(title_field.value or '').strip()
+            author=(author_field.value or '').strip()
+            if not title:
+                error_text.value='Title is required.'
+                warning_text.value=''
+                page.update()
+                return
+            error_text.value=''
+            if not author:
+                warning_text.value='Author is blank; searching by title only.'
+                show_status('Author is blank; searching by title only.')
+            close_dialog(dialog)
+            await search_by_title_author(book, author, title)
+        dialog=ft.AlertDialog(
+            modal=True,
+            title=ft.Text('Search Audible by Title + Author'),
+            content=ft.Column([
+                ft.Text(f'Confirm or edit the Audible search terms for {book.display_name}.'),
+                title_field,
+                author_field,
+                error_text,
+                warning_text,
+            ], tight=True, width=460),
+            actions=[ft.FilledButton('Search', on_click=submit), ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog))],
+        )
+        open_dialog(dialog)
     def create_title_author_search_handler(book):
         async def handler(_):
-            await search_by_title_author(book)
+            await confirm_title_author_search(book)
         return handler
     def create_asin_search_handler(book):
         async def handler(_):
