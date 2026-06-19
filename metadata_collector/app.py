@@ -6,12 +6,12 @@ import flet as ft
 
 IMAGE_CONTAIN_FIT = getattr(getattr(ft, 'ImageFit', None) or ft.BoxFit, 'CONTAIN')
 
-from .audible_client import AudibleClient, asin_url, build_title_author_query, parse_search_results, runtime_difference_minutes, search_url, sort_results_by_runtime_match
+from .audible_client import AudibleClient, build_title_author_query, normalize_asin, parse_search_results, product_from_asin_response, runtime_difference_minutes, sort_results_by_runtime_match, validate_asin
 from .config import load_settings, save_settings
 from .db import init_db, get_session_factory
 from .audio_scan import scan_directory
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
-from .history import create_change_group, log_changes, store_snapshot
+from .history import create_change_group, log_changes, metadata_diff, store_snapshot
 from .metadata_map import normalize_response
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
 logging.basicConfig(level=logging.INFO)
@@ -79,7 +79,7 @@ def main(page: ft.Page):
             ft.Text(result.asin or '', width=90),
             ft.Button('Select', on_click=on_select),
         ], wrap=True)
-    def show_comparison(book, metadata):
+    def show_comparison(book, metadata, source_type='audible_title_author'):
         first=book.files[0]
         current_cover_file=next((file for file in book.files if file.cover_data_uri), first)
         selected={}
@@ -201,10 +201,15 @@ def main(page: ft.Page):
                 show_status('No downloaded metadata fields selected to apply.')
                 return
             try:
-                for file_metadata in book.files:
-                    write_audio_metadata(file_metadata.path, updates)
-                    refreshed=read_audio_metadata(file_metadata.path)
-                    file_metadata.__dict__.update(refreshed.__dict__)
+                with Session() as session:
+                    group=create_change_group(session, book.key, source_type, 'Audible metadata update')
+                    for file_metadata in book.files:
+                        changes={tag: (getattr(file_metadata, tag, None), new_value) for tag, new_value in metadata_diff(file_metadata, updates).items()}
+                        write_audio_metadata(file_metadata.path, updates)
+                        refreshed=read_audio_metadata(file_metadata.path)
+                        file_metadata.__dict__.update(refreshed.__dict__)
+                        log_changes(session, group, book.key, file_metadata.path, changes, source_type)
+                    session.commit()
                 close_dialog(saving_dialog)
                 close_dialog(dialog)
                 show_success('Metadata changes saved.')
@@ -259,7 +264,7 @@ def main(page: ft.Page):
                 show_status(f'Audible ASIN lookup failed for {result.asin}: {exc}')
                 return
             show_status(f'Selected Audible result {result.asin}; showing comparison.')
-            show_comparison(book, metadata)
+            show_comparison(book, metadata, source_type='audible_title_author')
         if len(results) == 1:
             await select_result(results[0])
             return
@@ -272,14 +277,44 @@ def main(page: ft.Page):
         dialog=ft.AlertDialog(title=ft.Text('Select Audible search result'), content=ft.Column(rows, scroll=ft.ScrollMode.AUTO, height=500, width=1300), actions=[ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog))])
         open_dialog(dialog)
         show_status(f'Found {len(results)} Audible results for: {query}. Select one to compare metadata.')
+    async def lookup_asin_and_compare(book, asin):
+        try:
+            response=audible.lookup_asin(asin)
+            product=product_from_asin_response(response)
+            if not product:
+                show_status(f'No Audible book found for ASIN {asin}.')
+                return
+            metadata=normalize_response(product)
+        except ValueError as exc:
+            show_status(str(exc))
+            return
+        except Exception as exc:
+            show_status(f'Audible ASIN lookup failed for {asin}: {exc}')
+            return
+        show_status(f'Found Audible book for ASIN {asin}; showing comparison.')
+        show_comparison(book, metadata, source_type='audible_asin')
+
     async def search_by_asin(book):
         first=book.files[0]
-        asin=(first.asin or '').strip()
-        if not asin:
-            show_status(f'Cannot search {book.display_name}: missing ASIN metadata.')
-            return
-        await url_launcher.launch_url(asin_url(asin))
-        show_status(f'Opened Audible ASIN lookup for: {asin}')
+        asin_field=ft.TextField(label='ASIN', value=first.asin or '', autofocus=True, width=320)
+        error_text=ft.Text('', color=ft.Colors.RED)
+        dialog=None
+        async def submit(_):
+            clean=normalize_asin(asin_field.value)
+            valid, error=validate_asin(clean)
+            if not valid:
+                error_text.value=error
+                page.update()
+                return
+            close_dialog(dialog)
+            await lookup_asin_and_compare(book, clean)
+        dialog=ft.AlertDialog(
+            modal=True,
+            title=ft.Text('Search Audible by ASIN'),
+            content=ft.Column([ft.Text(f'Confirm or edit the ASIN for {book.display_name}.'), asin_field, error_text], tight=True, width=360),
+            actions=[ft.FilledButton('Search', on_click=submit), ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog))],
+        )
+        open_dialog(dialog)
     def create_title_author_search_handler(book):
         async def handler(_):
             await search_by_title_author(book)
