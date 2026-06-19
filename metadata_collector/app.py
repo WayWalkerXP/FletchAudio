@@ -109,8 +109,6 @@ def main(page: ft.Page):
                 if value:
                     controls.append(ft.Image(src=value, width=64, height=64, fit=IMAGE_CONTAIN_FIT))
                     controls.append(ft.Text(value, selectable=True, width=220, no_wrap=False))
-                    if field == 'cover_url' and checkbox and checkbox.disabled:
-                        controls.append(ft.Text('Cover writing is not implemented yet.', size=11, italic=True, width=220))
                 else:
                     controls.append(ft.Text('Missing', width=300))
             return ft.Row(controls, spacing=8, vertical_alignment=ft.CrossAxisAlignment.START)
@@ -156,7 +154,7 @@ def main(page: ft.Page):
         for field, label, downloaded, current, kind in specs:
             writable=field not in NON_WRITABLE_FIELDS
             if field == 'cover_url':
-                selected[field]=ft.Checkbox(value=False, disabled=True, tooltip='Cover writing is not implemented yet.')
+                selected[field]=ft.Checkbox(value=is_present(downloaded), disabled=not is_present(downloaded))
             elif writable:
                 selected[field]=ft.Checkbox(value=is_present(downloaded), disabled=not is_present(downloaded))
             rows.append(ft.Container(content=ft.Row([
@@ -169,7 +167,7 @@ def main(page: ft.Page):
             saving_dialog=ft.AlertDialog(modal=True, title=ft.Text('Saving metadata changes...'), content=ft.Text('Please wait while FletchAudio writes the selected tags.'))
             open_dialog(saving_dialog)
             page.update()
-            updates={field: downloaded for field, _, downloaded, _, _ in specs if field not in NON_WRITABLE_FIELDS and field != 'cover_url' and selected.get(field) and selected[field].value and is_present(downloaded)}
+            updates={field: downloaded for field, _, downloaded, _, _ in specs if field not in NON_WRITABLE_FIELDS and selected.get(field) and selected[field].value and is_present(downloaded)}
             if not updates:
                 close_dialog(saving_dialog)
                 apply_button.disabled=False
