@@ -20,6 +20,10 @@ def main(page: ft.Page):
     engine=init_db(); Session=get_session_factory(engine); settings=load_settings(); books=[]
     page.title='FletchAudio'; page.theme_mode={'Light':ft.ThemeMode.LIGHT,'Dark':ft.ThemeMode.DARK}.get(settings.get('theme'), ft.ThemeMode.SYSTEM)
     status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); url_launcher=ft.UrlLauncher(); audible=AudibleClient()
+    if hasattr(page, 'services'):
+        page.services.append(url_launcher)
+    elif hasattr(page, 'overlay'):
+        page.overlay.append(url_launcher)
     def show_status(message: str):
         status.value=message; page.update()
     def show_success(message: str):
@@ -284,15 +288,22 @@ def main(page: ft.Page):
         async def handler(_):
             await search_by_asin(book)
         return handler
+    async def maybe_await(value):
+        if inspect.isawaitable(value):
+            return await value
+        return value
+    def register_page_service(service):
+        service_type=getattr(ft, 'Service', None)
+        if hasattr(page, 'services') and (service_type is None or isinstance(service, service_type)):
+            page.services.append(service)
+        elif hasattr(page, 'overlay'):
+            page.overlay.append(service)
+        page.update()
+        return service
     def create_file_picker(on_result=None):
         file_picker_params=inspect.signature(ft.FilePicker).parameters
         picker=ft.FilePicker(on_result=on_result) if 'on_result' in file_picker_params else ft.FilePicker()
-        if hasattr(page, 'services'):
-            page.services.append(picker)
-        elif hasattr(page, 'overlay'):
-            page.overlay.append(picker)
-        page.update()
-        return picker
+        return register_page_service(picker)
     def show_manual_edit(book):
         first=book.files[0]
         current_cover_file=next((file for file in book.files if file.cover_data_uri), first)
@@ -477,7 +488,8 @@ def main(page: ft.Page):
     theme=ft.Dropdown(label='Theme', value=settings.get('theme','System'), options=[ft.dropdown.Option(x) for x in ['System','Light','Dark']])
     theme.on_change=apply_theme
     async def select_working_directory(e):
-        path = await ft.FilePicker().get_directory_path()
+        picker=create_file_picker()
+        path = await maybe_await(picker.get_directory_path())
         if path:
             scan(path)
     def scan(path=None):
