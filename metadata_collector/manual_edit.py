@@ -10,6 +10,13 @@ from .models import AudioFileMetadata
 
 MANUAL_EDIT_SOURCE_TYPE = 'manual_edit'
 BOOLEAN_FIELDS = {'explicit', 'dramatic_audio'}
+DEBUG_SELECTED_FILE_PATH = ''
+
+
+def set_debug_dirty_selected_file_path(path: str | None) -> None:
+    global DEBUG_SELECTED_FILE_PATH
+    DEBUG_SELECTED_FILE_PATH = path or ''
+
 
 MANUAL_EDIT_TAGS = [
     ('title', 'Title'),
@@ -155,6 +162,40 @@ def normalize_for_dirty_check(values: dict[str, Any]) -> dict[str, Any]:
     return normalize_edit_values(values)
 
 
+def debug_dirty_check(baseline: dict[str, Any], edited: dict[str, Any]) -> None:
+    baseline_normalized = normalize_edit_values(baseline)
+    edited_normalized = normalize_edit_values(edited)
+    baseline_keys = set(baseline_normalized)
+    edited_keys = set(edited_normalized)
+    only_baseline = baseline_keys - edited_keys
+    only_edited = edited_keys - baseline_keys
+    changed_fields = [field for field in sorted(baseline_keys | edited_keys) if baseline_normalized.get(field, '') != edited_normalized.get(field, '')]
+
+    print('DIRTY CHECK DEBUG')
+    print(f'selected_file_path={DEBUG_SELECTED_FILE_PATH}')
+    print()
+    print(f'baseline keys: {sorted(baseline_keys)!r}')
+    print(f'edited keys: {sorted(edited_keys)!r}')
+    print()
+    print('Only in baseline:')
+    print(f'  {only_baseline!r}')
+    print()
+    print('Only in edited:')
+    print(f'  {only_edited!r}')
+    print()
+    print('Changed fields:')
+    if not changed_fields:
+        print('  No dirty fields detected.')
+        return
+    for field in changed_fields:
+        baseline_value = baseline_normalized.get(field, '')
+        edited_value = edited_normalized.get(field, '')
+        print(f'  {field}:')
+        print(f'    baseline={baseline_value!r} {type(baseline_value)!r}')
+        print(f'    edited={edited_value!r} {type(edited_value)!r}')
+        print()
+
+
 def changed_edit_fields(baseline: dict[str, Any], edited: dict[str, Any], cover_state: CoverEditState | None = None) -> dict[str, tuple[Any, Any]]:
     baseline_normalized = normalize_edit_values(baseline)
     edited_normalized = normalize_edit_values(build_edit_form_values(edited))
@@ -167,7 +208,10 @@ def changed_edit_fields(baseline: dict[str, Any], edited: dict[str, Any], cover_
 
 
 def has_unsaved_changes(baseline: dict[str, Any], edited: dict[str, Any], cover_state: CoverEditState | None = None) -> bool:
-    return bool(changed_edit_fields(baseline, edited, cover_state))
+    changed = changed_edit_fields(baseline, edited, cover_state)
+    if changed:
+        debug_dirty_check(baseline, edited)
+    return bool(changed)
 
 
 def manual_changed_fields(current: AudioFileMetadata, edited: dict[str, Any], cover_state: CoverEditState | None = None) -> dict[str, tuple[Any, Any]]:

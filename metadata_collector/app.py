@@ -13,7 +13,7 @@ from .audio_scan import scan_directory
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
 from .history import create_change_group, log_changes, store_snapshot
 from .metadata_map import normalize_response
-from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, sorted_manual_edit_files
+from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
 logging.basicConfig(level=logging.INFO)
 
 def main(page: ft.Page):
@@ -334,8 +334,11 @@ def main(page: ft.Page):
         def build_edit_values_from_controls():
             return edited_values()
         def has_unsaved_changes():
-            changed_fields=changed_edit_fields(baseline_values['values'], build_edit_values_from_controls(), cover_state)
+            edited=build_edit_values_from_controls()
+            set_debug_dirty_selected_file_path(selected_file_path['path'])
+            changed_fields=changed_edit_fields(baseline_values['values'], edited, cover_state)
             if changed_fields:
+                debug_dirty_check(baseline_values['values'], edited)
                 logging.debug('Dirty fields:\n%s', '\n'.join(f"  {field}: baseline={old!r} edited={new!r}" for field, (old, new) in changed_fields.items()))
             return bool(changed_fields)
         def refresh_cover_preview():
@@ -381,6 +384,7 @@ def main(page: ft.Page):
             for file_meta_path, button in file_buttons.items():
                 button.bgcolor=selected_row_bg if file_meta_path == selected_file_path['path'] else None
             dirty=has_unsaved_changes()
+            print(f'After load dirty check result: {dirty}')
             logging.info('Loaded file %s; dirty=%s', file_path, dirty)
             page.update()
         def on_cover_selected(e):
