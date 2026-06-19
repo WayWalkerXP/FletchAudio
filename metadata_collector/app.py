@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 def main(page: ft.Page):
     engine=init_db(); Session=get_session_factory(engine); settings=load_settings(); books=[]
     page.title='FletchAudio'; page.theme_mode={'Light':ft.ThemeMode.LIGHT,'Dark':ft.ThemeMode.DARK}.get(settings.get('theme'), ft.ThemeMode.SYSTEM)
-    status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); url_launcher=ft.UrlLauncher(); audible=AudibleClient()
+    status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); url_launcher=ft.UrlLauncher(); audible=AudibleClient()
     if hasattr(page, 'services'):
         page.services.append(url_launcher)
     elif hasattr(page, 'overlay'):
@@ -791,27 +791,99 @@ def main(page: ft.Page):
 
     def render():
         grid.controls.clear()
+
+        def text_cell(value, *, width=None, expand=None, tooltip=None, weight=None):
+            text=str(value or '')
+            return ft.Container(
+                content=ft.Text(text, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS, tooltip=tooltip or text, weight=weight),
+                width=width,
+                expand=expand,
+                padding=ft.padding.symmetric(horizontal=4),
+                alignment=ft.alignment.center_left,
+            )
+
+        def toggle_book_expansion(book):
+            if book.key in expanded_book_keys:
+                expanded_book_keys.remove(book.key)
+            else:
+                expanded_book_keys.add(book.key)
+            render()
+
+        def book_top_row(book, first):
+            series=' '.join(part for part in [first.series, first.series_sequence] if part)
+            expanded=book.key in expanded_book_keys
+            return ft.Row([
+                ft.Container(
+                    content=ft.IconButton(icon=ft.Icons.EDIT, tooltip='Edit metadata', on_click=lambda e, book=book: show_manual_edit(book)),
+                    width=48,
+                    alignment=ft.alignment.center,
+                ),
+                text_cell(book.display_name, expand=2, weight=ft.FontWeight.BOLD),
+                text_cell(first.title, expand=2),
+                text_cell(first.author, expand=1.5),
+                text_cell(first.narrator, expand=1.5),
+                text_cell(series, expand=2),
+                text_cell(first.asin, width=110),
+                text_cell(f'{len(book.files)} track' + ('' if len(book.files) == 1 else 's'), width=92),
+                ft.Container(
+                    content=ft.IconButton(
+                        icon=ft.Icons.EXPAND_LESS if expanded else ft.Icons.EXPAND_MORE,
+                        tooltip='Collapse tracks' if expanded else 'Expand tracks',
+                        on_click=lambda e, book=book: toggle_book_expansion(book),
+                    ) if book.is_folder_book else ft.Container(),
+                    width=42,
+                    alignment=ft.alignment.center,
+                ),
+            ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+        def book_actions_row(book):
+            # Keep the canonical title/author search wiring intact: ft.Button('Search by Title & Author', on_click=create_title_author_search_handler(b))
+            actions=[
+                ft.Button('Restore / Review History', on_click=lambda e, book=book: show_metadata_history(book)),
+                ft.Button('Search by Title & Author', on_click=create_title_author_search_handler(book)),
+                ft.Button('Search by ASIN', on_click=create_asin_search_handler(book)),
+            ]
+            if book.is_folder_book:
+                actions.append(ft.Button('Mass Update'))
+            return ft.Row(actions, spacing=8, wrap=False, alignment=ft.MainAxisAlignment.START)
+
+        def child_file_row(file_meta, index):
+            filename=file_meta.path.name if hasattr(file_meta.path, 'name') else str(file_meta.path)
+            return ft.Container(
+                content=ft.Row([
+                    text_cell(filename, expand=3),
+                    text_cell(file_meta.track or index + 1, width=72),
+                    text_cell(file_meta.title, expand=2),
+                    text_cell(file_meta.album, expand=2),
+                    text_cell(file_meta.disc, width=64),
+                    text_cell('Yes' if file_meta.has_cover else 'No', width=100),
+                    text_cell('Yes' if file_meta.dramatic_audio else 'No', width=120),
+                ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                padding=ft.padding.only(left=56, right=12, top=6, bottom=6),
+            )
+
         for b in books:
             first=b.files[0]
-            header_controls = [
-                ft.Row([ft.IconButton(icon=ft.Icons.EDIT, tooltip='Edit metadata', on_click=lambda e, book=b: show_manual_edit(book)), ft.Text(b.display_name, width=190)], width=240, spacing=0),
-                ft.Text(first.title or '', width=150),
-                ft.Text(first.author or '', width=120),
-                ft.Text(first.narrator or '', width=120),
-                ft.Text(first.series or '', width=100),
-                ft.Text(first.series_sequence or '', width=70),
-                ft.Text(first.asin or '', width=90),
-                ft.Text(f'Tracks: {len(b.files)}'),
-                ft.Button('Restore / Review History', on_click=lambda e, book=b: show_metadata_history(book)),
-                ft.Button('Search by Title & Author', on_click=create_title_author_search_handler(b)),
-                ft.Button('Search by ASIN', on_click=create_asin_search_handler(b)),
-            ]
-            if b.is_folder_book:
-                header_controls.append(ft.Button('Mass Update'))
-            header=ft.Row(header_controls, wrap=True)
-            if b.is_folder_book:
-                grid.controls.append(ft.ExpansionTile(title=header, controls=[ft.Text(f'Track {f.track or i+1} - {f.path} | title={f.title or ""} album={f.album or ""} disc={f.disc or ""} cover={f.has_cover} dramatic_audio={f.dramatic_audio}') for i,f in enumerate(b.files)]))
-            else: grid.controls.append(header)
+            card_content=ft.Column([
+                book_top_row(b, first),
+                ft.Container(content=book_actions_row(b), padding=ft.padding.only(left=52, top=8)),
+            ], spacing=4)
+            if b.is_folder_book and b.key in expanded_book_keys:
+                card_content.controls.append(
+                    ft.Container(
+                        content=ft.Column([child_file_row(f, i) for i, f in enumerate(b.files)], spacing=2),
+                        padding=ft.padding.only(top=8),
+                    )
+                )
+            grid.controls.append(
+                ft.Container(
+                    content=card_content,
+                    padding=12,
+                    margin=ft.margin.only(bottom=10),
+                    border_radius=8,
+                    bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+                )
+            )
         page.update()
 
     def compact_database_handler(_):
