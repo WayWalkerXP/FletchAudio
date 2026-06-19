@@ -16,6 +16,22 @@ def main(page: ft.Page):
     status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); url_launcher=ft.UrlLauncher(); audible=AudibleClient()
     def show_status(message: str):
         status.value=message; page.update()
+
+    def open_dialog(dialog):
+        page_open = getattr(page, 'open', None)
+        if page_open:
+            page_open(dialog)
+            return
+        page.dialog = dialog
+        dialog.open = True
+        page.update()
+    def close_dialog(dialog):
+        page_close = getattr(page, 'close', None)
+        if page_close:
+            page_close(dialog)
+            return
+        dialog.open = False
+        page.update()
     def source_duration_seconds(book):
         durations=[f.duration for f in book.files if f.duration is not None]
         if not durations:
@@ -54,7 +70,7 @@ def main(page: ft.Page):
             ('Published', first.published_date, metadata.published_date), ('Language', first.language, metadata.language),
         ]:
             rows.append(ft.Row([ft.Text(label, width=100), ft.Text(str(current or ''), width=240), ft.Text(str(new_value or ''), width=240)], wrap=True))
-        page.open(ft.AlertDialog(title=ft.Text('Current / New metadata comparison'), content=ft.Column(rows, scroll=ft.ScrollMode.AUTO, height=400), actions=[ft.TextButton('Close', on_click=lambda e: page.close(e.control.parent))]))
+        open_dialog(ft.AlertDialog(title=ft.Text('Current / New metadata comparison'), content=ft.Column(rows, scroll=ft.ScrollMode.AUTO, height=400), actions=[ft.TextButton('Close', on_click=lambda e: close_dialog(e.control.parent))]))
     async def search_by_title_author(book):
         first=book.files[0]
         query=build_title_author_query(first.author, first.title or first.album or book.display_name)
@@ -89,11 +105,11 @@ def main(page: ft.Page):
         rows=[ft.Row([ft.Text('Title', width=180), ft.Text('Subtitle', width=120), ft.Text('Authors', width=140), ft.Text('Narrators', width=140), ft.Text('Audible', width=80), ft.Text('Source', width=90), ft.Text('Diff min', width=80), ft.Text('Series', width=120), ft.Text('ASIN', width=90)])]
         for result in results:
             async def handler(_, selected=result):
-                page.close(dialog)
+                close_dialog(dialog)
                 await select_result(selected)
             rows.append(result_row(result, source_seconds, handler))
-        dialog=ft.AlertDialog(title=ft.Text('Select Audible search result'), content=ft.Column(rows, scroll=ft.ScrollMode.AUTO, height=500, width=1300), actions=[ft.TextButton('Cancel', on_click=lambda e: page.close(dialog))])
-        page.open(dialog)
+        dialog=ft.AlertDialog(title=ft.Text('Select Audible search result'), content=ft.Column(rows, scroll=ft.ScrollMode.AUTO, height=500, width=1300), actions=[ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog))])
+        open_dialog(dialog)
         show_status(f'Found {len(results)} Audible results for: {query}. Select one to compare metadata.')
     async def search_by_asin(book):
         first=book.files[0]
