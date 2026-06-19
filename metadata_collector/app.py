@@ -251,6 +251,14 @@ def main(page: ft.Page):
         results=sort_results_by_runtime_match(parse_search_results(response), source_seconds)
         if not results:
             show_status(f'No Audible results found for: {query}')
+            no_results_dialog=None
+            no_results_dialog=ft.AlertDialog(
+                modal=True,
+                title=ft.Text('No Audible results'),
+                content=ft.Text('No Audible results found.'),
+                actions=[ft.TextButton('Close', on_click=lambda e: close_dialog(no_results_dialog))],
+            )
+            open_dialog(no_results_dialog)
             return
         async def select_result(result):
             if not result.asin:
@@ -264,9 +272,6 @@ def main(page: ft.Page):
                 return
             show_status(f'Selected Audible result {result.asin}; showing comparison.')
             show_comparison(book, metadata, source_type='audible_title_author')
-        if len(results) == 1:
-            await select_result(results[0])
-            return
         rows=[ft.Row([ft.Text('Title', width=180), ft.Text('Subtitle', width=120), ft.Text('Authors', width=140), ft.Text('Narrators', width=140), ft.Text('Audible', width=80), ft.Text('Source', width=90), ft.Text('Diff min', width=80), ft.Text('Series', width=120), ft.Text('ASIN', width=90)])]
         for result in results:
             async def handler(_, selected=result):
@@ -316,8 +321,8 @@ def main(page: ft.Page):
         open_dialog(dialog)
     async def confirm_title_author_search(book):
         first=book.files[0]
-        title_field=ft.TextField(label='Title', value=first.title or first.album or book.display_name, autofocus=True, width=420)
-        author_field=ft.TextField(label='Author', value=first.author or first.albumartist or '', width=420)
+        author_field=ft.TextField(label='Author', value=first.author or first.albumartist or '', autofocus=True, width=420)
+        title_field=ft.TextField(label='Album/Title', value=first.album or first.title or book.display_name, width=420)
         error_text=ft.Text('', color=ft.Colors.RED)
         warning_text=ft.Text('', color=ft.Colors.AMBER)
         dialog=None
@@ -337,11 +342,11 @@ def main(page: ft.Page):
             await search_by_title_author(book, author, title)
         dialog=ft.AlertDialog(
             modal=True,
-            title=ft.Text('Search Audible by Title + Author'),
+            title=ft.Text('Search Audible by Title & Author'),
             content=ft.Column([
                 ft.Text(f'Confirm or edit the Audible search terms for {book.display_name}.'),
-                title_field,
                 author_field,
+                title_field,
                 error_text,
                 warning_text,
             ], tight=True, width=460),
@@ -657,7 +662,7 @@ def main(page: ft.Page):
                 ft.Text(first.asin or '', width=90),
                 ft.Text(f'Tracks: {len(b.files)}'),
                 ft.Button('Restore / Review History'),
-                ft.Button('Search by Title + Author', on_click=create_title_author_search_handler(b)),
+                ft.Button('Search by Title & Author', on_click=create_title_author_search_handler(b)),
                 ft.Button('Search by ASIN', on_click=create_asin_search_handler(b)),
             ]
             if b.is_folder_book:
