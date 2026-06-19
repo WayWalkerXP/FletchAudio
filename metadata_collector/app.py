@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import flet as ft
@@ -164,12 +165,30 @@ def main(page: ft.Page):
             ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START), border=row_border))
         async def apply_selected(_):
             apply_button.disabled=True
-            saving_dialog=ft.AlertDialog(modal=True, title=ft.Text('Saving metadata changes...'), content=ft.Text('Please wait while FletchAudio writes the selected tags.'))
+            saving_text=ft.Text('Writing tags. Please wait...')
+            continue_button=ft.TextButton('Close - saving...', disabled=True)
+            saving_dialog=ft.AlertDialog(
+                modal=True,
+                title=ft.Text('Saving metadata changes...'),
+                content=ft.Column([ft.ProgressRing(), saving_text], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                actions=[continue_button],
+            )
+
+            def finish_save_dialog(_):
+                close_dialog(saving_dialog)
+                close_dialog(dialog)
+                render()
+
+            continue_button.on_click=finish_save_dialog
             open_dialog(saving_dialog)
             page.update()
+            # TODO: Remove this temporary debug delay after verifying the saving dialog renders.
+            await asyncio.sleep(1.75)
             updates={field: downloaded for field, _, downloaded, _, _ in specs if field not in NON_WRITABLE_FIELDS and selected.get(field) and selected[field].value and is_present(downloaded)}
             if not updates:
-                close_dialog(saving_dialog)
+                saving_text.value='Save complete.'
+                continue_button.text='Continue'
+                continue_button.disabled=False
                 apply_button.disabled=False
                 page.update()
                 show_status('No downloaded metadata fields selected to apply.')
@@ -179,9 +198,10 @@ def main(page: ft.Page):
                     write_audio_metadata(file_metadata.path, updates)
                     refreshed=read_audio_metadata(file_metadata.path)
                     file_metadata.__dict__.update(refreshed.__dict__)
-                close_dialog(saving_dialog)
-                close_dialog(dialog)
-                render()
+                saving_text.value='Save complete.'
+                continue_button.text='Continue'
+                continue_button.disabled=False
+                page.update()
                 show_status('Metadata changes saved.')
             except Exception as exc:
                 close_dialog(saving_dialog)
