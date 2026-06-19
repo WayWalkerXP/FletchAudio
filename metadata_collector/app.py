@@ -287,7 +287,9 @@ def main(page: ft.Page):
     def create_file_picker(on_result=None):
         file_picker_params=inspect.signature(ft.FilePicker).parameters
         picker=ft.FilePicker(on_result=on_result) if 'on_result' in file_picker_params else ft.FilePicker()
-        if hasattr(page, 'overlay'):
+        if hasattr(page, 'services'):
+            page.services.append(picker)
+        elif hasattr(page, 'overlay'):
             page.overlay.append(picker)
         page.update()
         return picker
