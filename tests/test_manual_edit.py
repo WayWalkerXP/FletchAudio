@@ -41,6 +41,24 @@ def test_manual_edit_validates_published_year():
         build_manual_metadata_diff(current, {'published_year': '20AB'})
 
 
+def test_manual_edit_checked_boolean_creates_true_update():
+    current = AudioFileMetadata('/tmp/book.mp3', explicit=False)
+
+    assert build_manual_metadata_diff(current, {'explicit': True}) == {'explicit': True}
+
+
+def test_manual_edit_unchecked_boolean_creates_false_update():
+    current = AudioFileMetadata('/tmp/book.mp3', explicit=True, dramatic_audio=True)
+
+    assert build_manual_metadata_diff(current, {'explicit': False, 'dramatic_audio': False}) == {'explicit': False, 'dramatic_audio': False}
+
+
+def test_manual_edit_unchanged_false_boolean_is_ignored():
+    current = AudioFileMetadata('/tmp/book.mp3', explicit=False, dramatic_audio=False)
+
+    assert build_manual_metadata_diff(current, {'explicit': False, 'dramatic_audio': False}) == {}
+
+
 def test_manual_edit_cover_replacement_state():
     current = AudioFileMetadata('/tmp/book.mp3', has_cover=True, cover_data_uri='data:image/jpeg;base64,old')
 

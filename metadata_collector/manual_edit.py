@@ -8,6 +8,7 @@ from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag
 from .models import AudioFileMetadata
 
 MANUAL_EDIT_SOURCE_TYPE = 'manual_edit'
+BOOLEAN_FIELDS = {'explicit', 'dramatic_audio'}
 
 MANUAL_EDIT_TAGS = [
     ('title', 'Title'),
@@ -70,7 +71,7 @@ def normalize_manual_value(field: str, value: Any) -> Any:
         return text
     if field in {'track', 'disc'}:
         return str(value).strip()
-    if field in {'explicit', 'dramatic_audio'}:
+    if field in BOOLEAN_FIELDS:
         if isinstance(value, bool):
             return value
         text = str(value).strip().lower()
@@ -93,7 +94,7 @@ def build_manual_metadata_diff(current: AudioFileMetadata, edited: dict[str, Any
             continue
         normalized = normalize_manual_value(field, value)
         current_value = manual_current_value(current, field)
-        if field in {'explicit', 'dramatic_audio'}:
+        if field in BOOLEAN_FIELDS:
             current_value = getattr(current, field, None)
         if normalized != current_value:
             updates[field] = normalized

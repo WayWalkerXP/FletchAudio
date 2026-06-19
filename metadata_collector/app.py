@@ -13,7 +13,7 @@ from .audio_scan import scan_directory
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
 from .history import create_change_group, log_changes, store_snapshot
 from .metadata_map import normalize_response
-from .manual_edit import CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_manual_metadata_diff, filter_manual_updates_for_file, manual_current_value
+from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_manual_metadata_diff, filter_manual_updates_for_file, manual_current_value
 logging.basicConfig(level=logging.INFO)
 
 def main(page: ft.Page):
@@ -301,6 +301,7 @@ def main(page: ft.Page):
         cover_preview=ft.Column(spacing=6)
         cover_note=ft.Text('', color=ft.Colors.RED)
         current_cover=ft.Image(src=current_cover_file.cover_data_uri, width=64, height=64, fit=IMAGE_CONTAIN_FIT) if current_cover_file.cover_data_uri else ft.Text('Missing', width=120)
+        DESCRIPTION_HEIGHT=180
         divider_color=ft.Colors.OUTLINE_VARIANT
         row_border=ft.Border(bottom=ft.BorderSide(1, divider_color))
         column_border=ft.Border(left=ft.BorderSide(1, divider_color))
@@ -349,8 +350,8 @@ def main(page: ft.Page):
         def edit_control(field):
             value=manual_current_value(first, field)
             if field == 'description':
-                control=ft.TextField(value=str(value), multiline=True, min_lines=3, max_lines=6, width=320)
-            elif field in {'explicit', 'dramatic_audio'}:
+                control=ft.TextField(value=str(value), multiline=True, min_lines=6, max_lines=6, height=DESCRIPTION_HEIGHT, width=320)
+            elif field in BOOLEAN_FIELDS:
                 control=ft.Checkbox(value=bool(value) if value is not None and value != '' else False)
             else:
                 control=ft.TextField(value=str(value), width=320)
@@ -375,7 +376,16 @@ def main(page: ft.Page):
                 current=current_cover
             else:
                 edit=edit_control(field)
-                current=str(manual_current_value(first, field))
+                current_value=manual_current_value(first, field)
+                if field == 'description':
+                    current=ft.Container(
+                        content=ft.Column([ft.Text(str(current_value), selectable=True, no_wrap=False)], scroll=ft.ScrollMode.AUTO),
+                        height=DESCRIPTION_HEIGHT,
+                        expand=True,
+                        clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                    )
+                else:
+                    current=str(current_value)
             rows.append(ft.Container(content=ft.Row([
                 cell(ft.Text(label, weight=ft.FontWeight.W_500), 170),
                 cell(edit, 380, column_border),
@@ -399,7 +409,7 @@ def main(page: ft.Page):
             open_dialog(saving_dialog)
             await asyncio.sleep(0.1)
             try:
-                edited={field: control.value for field, control in controls.items()}
+                edited={field: (bool(control.value) if isinstance(control, ft.Checkbox) else control.value) for field, control in controls.items()}
                 updates=build_manual_metadata_diff(first, edited, cover_state)
                 updates=filter_manual_updates_for_file(book.is_folder_book, updates)
                 if not updates:
