@@ -18,19 +18,20 @@ def main(page: ft.Page):
         status.value=message; page.update()
 
     def open_dialog(dialog):
-        page_open = getattr(page, 'open', None)
-        if page_open:
-            page_open(dialog)
+        show_dialog = getattr(page, 'show_dialog', None)
+        if show_dialog:
+            show_dialog(dialog)
             return
         page.dialog = dialog
         dialog.open = True
         page.update()
-    def close_dialog(dialog):
-        page_close = getattr(page, 'close', None)
-        if page_close:
-            page_close(dialog)
+    def close_dialog(dialog=None):
+        pop_dialog = getattr(page, 'pop_dialog', None)
+        if pop_dialog:
+            pop_dialog()
             return
-        dialog.open = False
+        if dialog:
+            dialog.open = False
         page.update()
     def source_duration_seconds(book):
         durations=[f.duration for f in book.files if f.duration is not None]
@@ -57,7 +58,7 @@ def main(page: ft.Page):
             ft.Text(str(diff) if diff is not None else 'Unknown', width=80),
             ft.Text(series, width=120),
             ft.Text(result.asin or '', width=90),
-            ft.ElevatedButton('Select', on_click=on_select),
+            ft.Button('Select', on_click=on_select),
         ], wrap=True)
     def show_comparison(book, metadata):
         first=book.files[0]
@@ -140,12 +141,12 @@ def main(page: ft.Page):
                 ft.Text(first.series_sequence or '', width=70),
                 ft.Text(first.asin or '', width=90),
                 ft.Text(f'Tracks: {len(b.files)}'),
-                ft.ElevatedButton('Restore / Review History'),
-                ft.ElevatedButton('Search by Title + Author', on_click=create_title_author_search_handler(b)),
-                ft.ElevatedButton('Search by ASIN', on_click=create_asin_search_handler(b)),
+                ft.Button('Restore / Review History'),
+                ft.Button('Search by Title + Author', on_click=create_title_author_search_handler(b)),
+                ft.Button('Search by ASIN', on_click=create_asin_search_handler(b)),
             ]
             if b.is_folder_book:
-                header_controls.append(ft.ElevatedButton('Mass Update'))
+                header_controls.append(ft.Button('Mass Update'))
             header=ft.Row(header_controls, wrap=True)
             if b.is_folder_book:
                 grid.controls.append(ft.ExpansionTile(title=header, controls=[ft.Text(f'Track {f.track or i+1} - {f.path} | title={f.title or ""} album={f.album or ""} disc={f.disc or ""} cover={f.has_cover} dramatic_audio={f.dramatic_audio}') for i,f in enumerate(b.files)]))
@@ -170,6 +171,6 @@ def main(page: ft.Page):
         status.value=f'Found {len(books)} books.' + (f' {len(errors)} scan warnings logged.' if errors else '')
         for err in errors: logging.warning(err)
         render()
-    page.add(ft.Row([ft.ElevatedButton('Select Working Directory', on_click=select_working_directory), ft.ElevatedButton('Rescan', on_click=lambda _: scan()), theme]), status, grid)
+    page.add(ft.Row([ft.Button('Select Working Directory', on_click=select_working_directory), ft.Button('Rescan', on_click=lambda _: scan()), theme]), status, grid)
     if settings.get('working_directory'): scan(settings['working_directory'])
 if __name__ == '__main__': ft.run(main)
