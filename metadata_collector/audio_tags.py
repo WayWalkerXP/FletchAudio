@@ -10,6 +10,7 @@ from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 from .models import AudioFileMetadata
 
 NON_WRITABLE_FIELDS = {'duration', 'has_cover', 'cover_data_uri'}
+BOOLEAN_FIELDS = {'explicit', 'dramatic_audio'}
 
 
 def format_genres_for_tag(genres) -> str | None:
@@ -188,11 +189,33 @@ def read_audio_metadata(path: str) -> AudioFileMetadata:
         g=_text(tags,'TCON'); m.genres=g.split(', ') if g else []; m.track=_int_part(_text(tags,'TRCK')); m.disc=_int_part(_text(tags,'TPOS')); m.has_cover=any(str(k).startswith('APIC') for k in tags.keys()); m.cover_data_uri=_id3_cover_data_uri(tags)
     return m
 
+def _normalize_bool_metadata(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    if text in {'', 'false', '0', 'no', 'n', 'off', 'unchecked'}:
+        return False
+    if text in {'true', '1', 'yes', 'y', 'on', 'checked'}:
+        return True
+    return bool(value)
+
+
 def diff_metadata(current: AudioFileMetadata, updates: dict) -> dict:
     normalized_updates = dict(updates)
     if 'genres' in normalized_updates:
         normalized_updates['genres'] = format_genres_for_tag(normalized_updates['genres'])
-    return {k:v for k,v in normalized_updates.items() if k not in NON_WRITABLE_FIELDS and v not in (None, []) and hasattr(current,k) and (format_genres_for_tag(getattr(current,k)) if k == 'genres' else getattr(current,k))!=v}
+    for field in BOOLEAN_FIELDS & set(normalized_updates):
+        normalized_updates[field] = _normalize_bool_metadata(normalized_updates[field])
+    return {
+        k: v
+        for k, v in normalized_updates.items()
+        if k not in NON_WRITABLE_FIELDS
+        and v not in (None, [])
+        and hasattr(current, k)
+        and (_normalize_bool_metadata(getattr(current, k)) if k in BOOLEAN_FIELDS else (format_genres_for_tag(getattr(current, k)) if k == 'genres' else getattr(current, k))) != v
+    }
 
 def write_audio_metadata(path: str, updates: dict):
     updates={k:(format_genres_for_tag(v) if k == 'genres' else v) for k,v in updates.items() if k not in NON_WRITABLE_FIELDS and k != 'cover'}

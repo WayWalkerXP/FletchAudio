@@ -35,6 +35,12 @@ def test_diff_metadata_excludes_non_writable_duration_fields():
     assert diff_metadata(current, updates) == {'title': 'New'}
 
 
+def test_diff_metadata_normalizes_boolean_fields_and_preserves_false_updates():
+    assert diff_metadata(AudioFileMetadata('/tmp/book.mp3', dramatic_audio=None), {'dramatic_audio': ''}) == {}
+    assert diff_metadata(AudioFileMetadata('/tmp/book.mp3', explicit=True), {'explicit': False}) == {'explicit': False}
+    assert diff_metadata(AudioFileMetadata('/tmp/book.mp3', explicit=False), {'explicit': 'unchecked'}) == {}
+
+
 def test_write_audio_metadata_filters_non_writable_fields_before_tag_writes(monkeypatch):
     class FakeTags(dict):
         def setall(self, key, values):

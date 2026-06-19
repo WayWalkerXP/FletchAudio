@@ -74,6 +74,29 @@ def test_manual_edit_unchanged_false_boolean_is_ignored():
     assert build_manual_metadata_diff(current, {'explicit': False, 'dramatic_audio': False}) == {}
 
 
+def test_normalize_edit_values_returns_booleans_for_boolean_fields():
+    false_values = [False, None, '', 'false', 'False', '0', 'no', 'n', 'off', 'unchecked']
+    true_values = [True, 'true', 'True', '1', 'yes', 'y', 'on', 'checked']
+
+    for value in false_values:
+        assert normalize_edit_values({'dramatic_audio': value}) == {'dramatic_audio': False}
+        assert normalize_edit_values({'explicit': value}) == {'explicit': False}
+
+    for value in true_values:
+        assert normalize_edit_values({'dramatic_audio': value}) == {'dramatic_audio': True}
+        assert normalize_edit_values({'explicit': value}) == {'explicit': True}
+
+
+def test_boolean_dirty_check_treats_empty_baseline_and_false_edit_as_unchanged():
+    baseline = {'dramatic_audio': '', 'explicit': None}
+    edited = {'dramatic_audio': False, 'explicit': False}
+
+    assert normalize_edit_values(baseline) == {'dramatic_audio': False, 'explicit': False}
+    assert normalize_edit_values(edited) == {'dramatic_audio': False, 'explicit': False}
+    assert changed_edit_fields(baseline, edited, CoverEditState()) == {}
+    assert not has_unsaved_changes(baseline, edited, CoverEditState())
+
+
 def test_manual_edit_cover_replacement_state():
     current = AudioFileMetadata('/tmp/book.mp3', has_cover=True, cover_data_uri='data:image/jpeg;base64,old')
 

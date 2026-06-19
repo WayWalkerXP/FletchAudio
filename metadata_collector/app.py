@@ -193,7 +193,7 @@ def main(page: ft.Page):
             page.update()
             # Yield to Flet so the modal is sent to the client before the synchronous tag write starts.
             await asyncio.sleep(0.1)
-            updates={field: downloaded for field, _, downloaded, _, _ in specs if field not in NON_WRITABLE_FIELDS and selected.get(field) and selected[field].value and is_present(downloaded)}
+            updates=normalize_for_dirty_check({field: downloaded for field, _, downloaded, _, _ in specs if field not in NON_WRITABLE_FIELDS and selected.get(field) and selected[field].value and is_present(downloaded)})
             if not updates:
                 close_dialog(saving_dialog)
                 apply_button.disabled=False
