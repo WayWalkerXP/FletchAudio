@@ -12,6 +12,9 @@ def padding_symmetric(*, horizontal=0, vertical=0):
 def padding_only(*, left=0, right=0, top=0, bottom=0):
     return ft.Padding(left=left, right=right, top=top, bottom=bottom)
 
+def margin_only(*, left=0, right=0, top=0, bottom=0):
+    return ft.Margin(left=left, right=right, top=top, bottom=bottom)
+
 from .audible_client import AudibleClient, build_title_author_query, normalize_asin, parse_search_results, product_from_asin_response, runtime_difference_minutes, sort_results_by_runtime_match, validate_asin
 from .config import load_settings, save_settings
 from .db import init_db, get_session_factory
@@ -885,7 +888,7 @@ def main(page: ft.Page):
                 ft.Container(
                     content=card_content,
                     padding=12,
-                    margin=ft.margin.only(bottom=10),
+                    margin=margin_only(bottom=10),
                     border_radius=8,
                     bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
                 )
