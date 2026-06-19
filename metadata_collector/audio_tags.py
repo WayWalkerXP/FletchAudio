@@ -1,8 +1,9 @@
 from __future__ import annotations
 import base64
+import requests
 
 from mutagen import File
-from mutagen.id3 import ID3, TIT2, TALB, TPE1, TPE2, TCOM, TCON, TDRC, TPUB, COMM, TXXX, TRCK, TPOS
+from mutagen.id3 import ID3, APIC, TIT2, TALB, TPE1, TPE2, TCOM, TCON, TDRC, TPUB, COMM, TXXX, TRCK, TPOS
 from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 from .models import AudioFileMetadata
 
@@ -54,6 +55,30 @@ def _text(tags,*keys):
             return normalize_tag_value(tags[k])
     return None
 
+
+
+def _mime_from_image_data(data, fallback=None):
+    if data.startswith(b'\x89PNG\r\n\x1a\n'):
+        return 'image/png'
+    if data.startswith(b'\xff\xd8\xff'):
+        return 'image/jpeg'
+    return fallback or 'image/jpeg'
+
+def _cover_format(mime_type):
+    return MP4Cover.FORMAT_PNG if mime_type == 'image/png' else MP4Cover.FORMAT_JPEG
+
+def _download_cover(url):
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+    data = response.content
+    if not data:
+        raise ValueError('Downloaded cover image was empty')
+    content_type = (response.headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
+    if content_type not in {'image/jpeg', 'image/jpg', 'image/png'}:
+        content_type = _mime_from_image_data(data)
+    if content_type == 'image/jpg':
+        content_type = 'image/jpeg'
+    return data, content_type
 
 def _data_uri(data, mime_type):
     if not data:
@@ -109,7 +134,10 @@ def write_audio_metadata(path: str, updates: dict):
         tags=audio.tags or {}; audio.tags=tags
         mapping={'title':'©nam','album':'©alb','author':'©ART','albumartist':'aART','narrator':'©wrt','description':'desc','published_date':'©day','genres':'©gen'}
         for k,v in updates.items():
-            if k in mapping: tags[mapping[k]]=v if isinstance(v,list) else [str(v)]
+            if k == 'cover_url':
+                cover_data, mime_type = _download_cover(str(v))
+                tags['covr'] = [MP4Cover(cover_data, imageformat=_cover_format(mime_type))]
+            elif k in mapping: tags[mapping[k]]=v if isinstance(v,list) else [str(v)]
             elif k in {'series','series_sequence','asin','publisher','language','explicit','dramatic_audio'}: tags[f'----:com.apple.iTunes:{k.upper()}']=[MP4FreeForm(str(v).encode())]
             elif k=='track': tags['trkn']=[(int(v),0)]
             elif k=='disc': tags['disk']=[(int(v),0)]
@@ -118,7 +146,11 @@ def write_audio_metadata(path: str, updates: dict):
         tags=audio.tags
         frame={'title':TIT2,'album':TALB,'author':TPE1,'albumartist':TPE2,'narrator':TCOM,'publisher':TPUB,'published_date':TDRC,'genres':TCON,'track':TRCK,'disc':TPOS}
         for k,v in updates.items():
-            if k in frame: tags.setall(frame[k].__name__, [frame[k](encoding=3, text=[str(v)])])
+            if k == 'cover_url':
+                cover_data, mime_type = _download_cover(str(v))
+                tags.delall('APIC')
+                tags.add(APIC(encoding=3, mime=mime_type, type=3, desc='Cover', data=cover_data))
+            elif k in frame: tags.setall(frame[k].__name__, [frame[k](encoding=3, text=[str(v)])])
             elif k=='description': tags.setall('COMM',[COMM(encoding=3, lang='XXX', desc='', text=str(v))])
             else: tags.setall(f'TXXX:{k.upper()}', [TXXX(encoding=3, desc=k.upper(), text=[str(v)])])
     audio.save()
