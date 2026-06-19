@@ -170,3 +170,64 @@ def test_write_audio_metadata_replaces_existing_mp4_cover(monkeypatch):
     assert bytes(covers[0]) == JPEG_BYTES
     assert covers[0].imageformat == MP4Cover.FORMAT_JPEG
     assert fake_audio.saved is True
+
+
+def test_format_genres_for_tag_list_of_genres():
+    from metadata_collector.audio_tags import format_genres_for_tag
+
+    assert format_genres_for_tag(['Literature & Fiction', 'Action & Adventure', 'Mystery, Thriller & Suspense']) == 'Literature & Fiction\\Action & Adventure\\Mystery, Thriller & Suspense'
+
+
+def test_format_genres_for_tag_tuple_of_genres():
+    from metadata_collector.audio_tags import format_genres_for_tag
+
+    assert format_genres_for_tag(('One', 'Two')) == 'One\\Two'
+
+
+def test_format_genres_for_tag_list_with_duplicates():
+    from metadata_collector.audio_tags import format_genres_for_tag
+
+    assert format_genres_for_tag(['One', 'Two', 'One', 'Two']) == 'One\\Two'
+
+
+def test_format_genres_for_tag_list_with_empty_values():
+    from metadata_collector.audio_tags import format_genres_for_tag
+
+    assert format_genres_for_tag([' One ', '', None, '  ', 'Two']) == 'One\\Two'
+
+
+def test_format_genres_for_tag_already_formatted_string():
+    from metadata_collector.audio_tags import format_genres_for_tag
+
+    assert format_genres_for_tag('One\\Two') == 'One\\Two'
+
+
+def test_format_genres_for_tag_python_list_looking_string():
+    from metadata_collector.audio_tags import format_genres_for_tag
+
+    assert format_genres_for_tag("['Literature & Fiction', 'Action & Adventure', 'Mystery, Thriller & Suspense']") == 'Literature & Fiction\\Action & Adventure\\Mystery, Thriller & Suspense'
+
+
+def test_diff_metadata_formats_genre_updates():
+    assert diff_metadata(AudioFileMetadata('/tmp/book.mp3', genres=[]), {'genres': ['One', 'Two']}) == {'genres': 'One\\Two'}
+
+
+def test_write_audio_metadata_formats_mp3_genres(monkeypatch):
+    class FakeTags(dict):
+        def setall(self, key, values):
+            self[key] = values
+
+    class FakeAudio:
+        def __init__(self):
+            self.tags = FakeTags()
+            self.saved = False
+
+        def save(self):
+            self.saved = True
+
+    fake_audio = FakeAudio()
+    monkeypatch.setattr('metadata_collector.audio_tags.File', lambda path, easy=False: fake_audio)
+
+    write_audio_metadata('/tmp/book.mp3', {'genres': ['One', 'Two']})
+
+    assert fake_audio.tags['TCON'][0].text == ['One\\Two']

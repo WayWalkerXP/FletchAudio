@@ -9,7 +9,7 @@ from .audible_client import AudibleClient, asin_url, build_title_author_query, p
 from .config import load_settings, save_settings
 from .db import init_db, get_session_factory
 from .audio_scan import scan_directory
-from .audio_tags import NON_WRITABLE_FIELDS, read_audio_metadata, write_audio_metadata
+from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
 from .history import store_snapshot
 from .metadata_map import normalize_response
 logging.basicConfig(level=logging.INFO)
@@ -106,7 +106,7 @@ def main(page: ft.Page):
             if kind == 'duration':
                 return format_duration(value)
             if kind == 'genres':
-                return ', '.join(value or [])
+                return format_genres_for_tag(value) or ''
             if kind == 'bool':
                 return format_bool(value)
             return str(value) if value not in (None, []) else ''
@@ -147,7 +147,7 @@ def main(page: ft.Page):
             ('published_date', 'Published Date', metadata.published_date, first.published_date, None),
             ('published_year', 'Published Year', metadata.published_year, first.published_year, None),
             ('language', 'Language', metadata.language, first.language, None),
-            ('genres', 'Genres', metadata.genres, first.genres, 'genres'),
+            ('genres', 'Genres', format_genres_for_tag(metadata.genres), format_genres_for_tag(first.genres), 'genres'),
             ('duration', 'Duration', metadata.duration, first.duration, 'duration'),
             ('explicit', 'Explicit', metadata.explicit, None, 'bool'),
             ('dramatic_audio', 'Dramatic Audio', None, first.dramatic_audio, 'bool'),
