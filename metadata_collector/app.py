@@ -8,7 +8,7 @@ from .audible_client import AudibleClient, asin_url, build_title_author_query, p
 from .config import load_settings, save_settings
 from .db import init_db, get_session_factory
 from .audio_scan import scan_directory
-from .audio_tags import write_audio_metadata
+from .audio_tags import NON_WRITABLE_FIELDS, read_audio_metadata, write_audio_metadata
 from .history import store_snapshot
 from .metadata_map import normalize_response
 logging.basicConfig(level=logging.INFO)
@@ -65,6 +65,7 @@ def main(page: ft.Page):
         ], wrap=True)
     def show_comparison(book, metadata):
         first=book.files[0]
+        current_cover_file=next((file for file in book.files if file.cover_data_uri), first)
         selected={}
         divider_color=ft.Colors.OUTLINE_VARIANT
         row_border=ft.Border(bottom=ft.BorderSide(1, divider_color))
@@ -101,15 +102,24 @@ def main(page: ft.Page):
             return str(value) if value not in (None, []) else ''
         def downloaded_control(field, value, kind=None):
             text=format_value(value, kind)
-            controls=[selected[field], ft.Text(text, selectable=True, width=300, no_wrap=False)]
+            checkbox=selected.get(field)
+            controls=([checkbox] if checkbox else []) + [ft.Text(text, selectable=True, width=300, no_wrap=False)]
             if field == 'cover_url':
-                controls=[selected[field]]
+                controls=([checkbox] if checkbox else [])
                 if value:
                     controls.append(ft.Image(src=value, width=64, height=64, fit=IMAGE_CONTAIN_FIT))
                     controls.append(ft.Text(value, selectable=True, width=220, no_wrap=False))
+                    if field == 'cover_url' and checkbox and checkbox.disabled:
+                        controls.append(ft.Text('Cover writing is not implemented yet.', size=11, italic=True, width=220))
                 else:
                     controls.append(ft.Text('Missing', width=300))
             return ft.Row(controls, spacing=8, vertical_alignment=ft.CrossAxisAlignment.START)
+        def current_control(field, value, kind=None):
+            if field == 'cover_url':
+                if current_cover_file.cover_data_uri:
+                    return ft.Image(src=current_cover_file.cover_data_uri, width=64, height=64, fit=IMAGE_CONTAIN_FIT)
+                return ft.Text('Missing', width=300)
+            return format_value(value, kind)
         def cell(content, width, border=None, padding=8):
             if isinstance(content, str):
                 content=ft.Text(content, selectable=True, width=width - (padding * 2), no_wrap=False)
@@ -135,7 +145,7 @@ def main(page: ft.Page):
             ('dramatic_audio', 'Dramatic Audio', None, first.dramatic_audio, 'bool'),
             ('track', 'Track', None, first.track, None),
             ('disc', 'Disc', None, first.disc, None),
-            ('cover_url', 'Cover', metadata.cover_url, 'Present' if first.has_cover else 'Missing', None),
+            ('cover_url', 'Cover', metadata.cover_url, current_cover_file.cover_data_uri, None),
         ]
         header=ft.Row([
             cell(ft.Text('Tag', weight=ft.FontWeight.BOLD), 170),
@@ -144,30 +154,49 @@ def main(page: ft.Page):
         ], spacing=0)
         rows=[header]
         for field, label, downloaded, current, kind in specs:
-            selected[field]=ft.Checkbox(value=is_present(downloaded), disabled=not is_present(downloaded))
+            writable=field not in NON_WRITABLE_FIELDS
+            if field == 'cover_url':
+                selected[field]=ft.Checkbox(value=False, disabled=True, tooltip='Cover writing is not implemented yet.')
+            elif writable:
+                selected[field]=ft.Checkbox(value=is_present(downloaded), disabled=not is_present(downloaded))
             rows.append(ft.Container(content=ft.Row([
                 cell(ft.Text(label, weight=ft.FontWeight.W_500), 170),
                 cell(downloaded_control(field, downloaded, kind), 410, column_border),
-                cell(format_value(current, kind), 330, column_border),
+                cell(current_control(field, current, kind), 330, column_border),
             ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START), border=row_border))
-        def apply_selected(_):
-            updates={field: downloaded for field, _, downloaded, _, _ in specs if field != 'cover_url' and selected[field].value and is_present(downloaded)}
+        async def apply_selected(_):
+            apply_button.disabled=True
+            saving_dialog=ft.AlertDialog(modal=True, title=ft.Text('Saving metadata changes...'), content=ft.Text('Please wait while FletchAudio writes the selected tags.'))
+            open_dialog(saving_dialog)
+            page.update()
+            updates={field: downloaded for field, _, downloaded, _, _ in specs if field not in NON_WRITABLE_FIELDS and field != 'cover_url' and selected.get(field) and selected[field].value and is_present(downloaded)}
             if not updates:
+                close_dialog(saving_dialog)
+                apply_button.disabled=False
+                page.update()
                 show_status('No downloaded metadata fields selected to apply.')
                 return
             try:
                 for file_metadata in book.files:
                     write_audio_metadata(file_metadata.path, updates)
+                    refreshed=read_audio_metadata(file_metadata.path)
+                    file_metadata.__dict__.update(refreshed.__dict__)
+                close_dialog(saving_dialog)
                 close_dialog(dialog)
-                show_status(f'Applied {len(updates)} Audible metadata fields to {book.display_name}. Rescan to refresh current values.')
+                render()
+                show_status('Metadata changes saved.')
             except Exception as exc:
+                close_dialog(saving_dialog)
+                apply_button.disabled=False
+                error_dialog=ft.AlertDialog(modal=True, title=ft.Text('Could not save metadata'), content=ft.Text(f'Failed to apply metadata to {book.display_name}: {exc}'), actions=[ft.TextButton('OK', on_click=lambda e: close_dialog(error_dialog))])
+                open_dialog(error_dialog)
                 show_status(f'Failed to apply Audible metadata to {book.display_name}: {exc}')
         title='Audible metadata comparison'
         subtitle=' · '.join(p for p in [metadata.title, metadata.asin] if p)
         dialog=ft.AlertDialog(
             title=ft.Column([ft.Text(title), ft.Text(subtitle, size=12, selectable=True)]),
             content=ft.Column(rows, scroll=ft.ScrollMode.AUTO, height=560, width=930, spacing=0),
-            actions=[ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog)), ft.FilledButton('Confirm / Apply', on_click=apply_selected)],
+            actions=[ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog)), (apply_button := ft.FilledButton('Confirm / Apply', on_click=apply_selected))],
         )
         open_dialog(dialog)
     async def search_by_title_author(book):

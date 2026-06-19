@@ -1,4 +1,5 @@
 import json
+from .audio_tags import NON_WRITABLE_FIELDS
 from .models import BookSnapshot, ChangeGroup, MetadataChange
 from .utils import json_dumps, stringify
 
@@ -10,7 +11,7 @@ def create_change_group(session, book_key, source_type, description=None):
     group=ChangeGroup(book_key=book_key,source_type=source_type,description=description); session.add(group); session.flush(); return group
 
 def metadata_diff(current, selected):
-    return {k:v for k,v in selected.items() if v not in (None, []) and getattr(current,k,None)!=v}
+    return {k:v for k,v in selected.items() if k not in NON_WRITABLE_FIELDS and v not in (None, []) and getattr(current,k,None)!=v}
 
 def log_changes(session, group, book_key, file_path, changes, source_type, status='success', error_message=None):
     rows=[]

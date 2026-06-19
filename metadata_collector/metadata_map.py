@@ -1,6 +1,10 @@
 import html, re
 from .models import AbsMetadata
 
+# Audible runtime is kept on AbsMetadata.duration for display/matching only;
+# write planning excludes duration as a non-writable technical field.
+AUDIBLE_RUNTIME_SECONDS_FIELD = 'duration'
+
 def _names(product, key): return ', '.join(x.get('name','') for x in product.get(key,[]) if x.get('name')) or None
 def _clean_html(text):
     if not text: return None
