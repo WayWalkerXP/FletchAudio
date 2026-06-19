@@ -15,6 +15,7 @@ from .history import create_change_group, log_changes, metadata_diff, store_snap
 from .metadata_map import normalize_response
 from .maintenance import compact_database, format_bytes
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
+from .history_restore import changes_for_group_file, is_restore_supported, list_change_groups_for_file, restore_selected_metadata
 logging.basicConfig(level=logging.INFO)
 
 def main(page: ft.Page):
@@ -649,6 +650,145 @@ def main(page: ft.Page):
         )
         save_button=dialog.actions[0].controls[1].controls[0]
         open_dialog(dialog)
+    def show_metadata_history(book):
+        history_files=sorted_manual_edit_files(book.files) if book.is_folder_book else list(book.files)
+        files_by_path={file_meta.path: file_meta for file_meta in history_files}
+        selected_file={'meta': history_files[0]}
+        selected_group={'group_id': None}
+        selected_changes=[]
+        selected_checks={}
+        group_buttons={}
+        file_buttons={}
+        groups_column=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True)
+        details_column=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True)
+        selected_row_bg=ft.Colors.PRIMARY_CONTAINER
+        divider_color=ft.Colors.OUTLINE_VARIANT
+        row_border=ft.Border(bottom=ft.BorderSide(1, divider_color))
+        column_border=ft.Border(left=ft.BorderSide(1, divider_color))
+        def cell(content, width, border=None, padding=8):
+            if isinstance(content, str):
+                content=ft.Text(content, selectable=True, width=width - (padding * 2), no_wrap=False)
+            return ft.Container(content=content, width=width, padding=padding, border=border)
+        def display_value(value):
+            if value is None:
+                return ''
+            if isinstance(value, bool):
+                return 'True' if value else 'False'
+            if isinstance(value, list):
+                return format_genres_for_tag(value) or ''
+            return str(value)
+        def current_value(meta, tag):
+            if tag == 'genres':
+                return format_genres_for_tag(meta.genres) or ''
+            if not hasattr(meta, tag):
+                return ''
+            value=getattr(meta, tag, None)
+            if isinstance(value, bool):
+                return 'True' if value else 'False'
+            return display_value(value)
+        def refresh_group_selection():
+            for group_id, button in group_buttons.items():
+                button.bgcolor=selected_row_bg if group_id == selected_group['group_id'] else None
+        def load_group(group_id):
+            selected_group['group_id']=group_id
+            selected_checks.clear()
+            selected_changes.clear()
+            details_column.controls.clear()
+            meta=selected_file['meta']
+            with Session() as session:
+                changes=changes_for_group_file(session, group_id, meta.path)
+                selected_changes.extend(changes)
+            details_column.controls.append(ft.Row([
+                cell(ft.Text('Restore', weight=ft.FontWeight.BOLD), 90),
+                cell(ft.Text('Tag', weight=ft.FontWeight.BOLD), 130, column_border),
+                cell(ft.Text('Old Value', weight=ft.FontWeight.BOLD), 210, column_border),
+                cell(ft.Text('New Value', weight=ft.FontWeight.BOLD), 210, column_border),
+                cell(ft.Text('Current Value', weight=ft.FontWeight.BOLD), 210, column_border),
+            ], spacing=0))
+            for change in selected_changes:
+                supported=is_restore_supported(change.tag_name) and hasattr(meta, change.tag_name)
+                checkbox=ft.Checkbox(value=False, disabled=not supported, tooltip='Cover, duration, and derived fields cannot be restored here.' if not supported else None)
+                selected_checks[change.id]=checkbox
+                details_column.controls.append(ft.Container(content=ft.Row([
+                    cell(checkbox, 90),
+                    cell(change.tag_name, 130, column_border),
+                    cell(change.old_value or '', 210, column_border),
+                    cell(change.new_value or '', 210, column_border),
+                    cell(current_value(meta, change.tag_name), 210, column_border),
+                ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START), border=row_border))
+            refresh_group_selection()
+            page.update()
+        def load_file(file_path):
+            selected_file['meta']=files_by_path[file_path]
+            selected_group['group_id']=None
+            group_buttons.clear()
+            groups_column.controls.clear()
+            details_column.controls.clear()
+            with Session() as session:
+                groups=list_change_groups_for_file(session, book.key, file_path)
+            if not groups:
+                groups_column.controls.append(ft.Text('No metadata history found for this item.'))
+                details_column.controls.append(ft.Text('No metadata history found for this item.'))
+            else:
+                for item in groups:
+                    group=item.group
+                    timestamp=group.created_at.strftime('%Y-%m-%d %H:%M:%S') if group.created_at else ''
+                    description=group.description or ''
+                    label=ft.Column([
+                        ft.Text(timestamp, weight=ft.FontWeight.BOLD),
+                        ft.Text(f'{group.source_type} · {item.changed_field_count} changed field(s)'),
+                        ft.Text(description, size=12, no_wrap=False),
+                    ], spacing=2)
+                    btn=ft.Container(content=label, padding=8, width=260, on_click=lambda e, gid=group.id: load_group(gid), ink=True)
+                    group_buttons[group.id]=btn
+                    groups_column.controls.append(btn)
+                load_group(groups[0].group.id)
+            for path, button in file_buttons.items():
+                button.bgcolor=selected_row_bg if path == file_path else None
+            page.update()
+        async def restore_selected(_):
+            checked_ids={change_id for change_id, checkbox in selected_checks.items() if checkbox.value}
+            changes=[change for change in selected_changes if change.id in checked_ids]
+            if not changes:
+                show_status('No metadata history fields selected to restore.')
+                return
+            restore_button.disabled=True
+            saving_dialog=ft.AlertDialog(modal=True, title=ft.Text('Restoring metadata...'), content=ft.Column([ft.ProgressRing(), ft.Text('Writing selected old values. Please wait...')], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER))
+            open_dialog(saving_dialog)
+            await asyncio.sleep(0.1)
+            try:
+                with Session() as session:
+                    restore_selected_metadata(session, book.key, selected_file['meta'], changes)
+                close_dialog(saving_dialog)
+                load_file(selected_file['meta'].path)
+                show_success('Selected metadata values restored.')
+                show_status('Selected metadata values restored.')
+                restore_button.disabled=False
+                render()
+            except Exception as exc:
+                close_dialog(saving_dialog)
+                restore_button.disabled=False
+                page.update()
+                error_dialog=ft.AlertDialog(modal=True, title=ft.Text('Could not restore metadata'), content=ft.Text(f'Failed to restore metadata for {selected_file["meta"].path}: {exc}'), actions=[ft.TextButton('OK', on_click=lambda e: close_dialog(error_dialog))])
+                open_dialog(error_dialog)
+                show_status(f'Failed to restore metadata for {selected_file["meta"].path}: {exc}')
+        left=ft.Row([ft.Container(content=groups_column, width=280, height=560, border=ft.Border(right=ft.BorderSide(1, divider_color))), ft.Container(content=details_column, width=860, height=560)], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START)
+        content=left
+        if book.is_folder_book:
+            file_rows=[]
+            for file_meta in history_files:
+                btn=ft.Container(content=ft.Text(manual_edit_file_label(file_meta), no_wrap=False), padding=8, width=220, on_click=lambda e, path=file_meta.path: load_file(path), ink=True)
+                file_buttons[file_meta.path]=btn
+                file_rows.append(btn)
+            content=ft.Row([ft.Container(content=ft.Column(file_rows, scroll=ft.ScrollMode.AUTO), width=240, height=560, border=ft.Border(right=ft.BorderSide(1, divider_color))), left], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START)
+        dialog=ft.AlertDialog(
+            title=ft.Column([ft.Text('Metadata History'), ft.Text(book.display_name, size=12, selectable=True)]),
+            content=content,
+            actions=[(restore_button := ft.FilledButton('Restore Selected', on_click=restore_selected)), ft.TextButton('Close', on_click=lambda e: close_dialog(dialog))],
+        )
+        load_file(history_files[0].path)
+        open_dialog(dialog)
+
     def render():
         grid.controls.clear()
         for b in books:
@@ -662,7 +802,7 @@ def main(page: ft.Page):
                 ft.Text(first.series_sequence or '', width=70),
                 ft.Text(first.asin or '', width=90),
                 ft.Text(f'Tracks: {len(b.files)}'),
-                ft.Button('Restore / Review History'),
+                ft.Button('Restore / Review History', on_click=lambda e, book=b: show_metadata_history(book)),
                 ft.Button('Search by Title & Author', on_click=create_title_author_search_handler(b)),
                 ft.Button('Search by ASIN', on_click=create_asin_search_handler(b)),
             ]

@@ -41,3 +41,96 @@ def test_log_changes_describes_cover_values_without_base64():
     assert rows[0].old_value.startswith('cover present sha256=')
     assert rows[0].new_value == 'missing'
     assert 'base64' not in rows[0].old_value
+
+from datetime import datetime, timedelta
+from metadata_collector.history_restore import (
+    build_restore_updates,
+    is_restore_supported,
+    list_change_groups_for_file,
+    restore_selected_metadata,
+)
+from metadata_collector.models import ChangeGroup, MetadataChange
+
+
+def _memory_session():
+    engine = create_engine('sqlite:///:memory:', future=True)
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, future=True)()
+
+
+def _add_change(session, book_key, file_path, tag, old, new, when):
+    group = ChangeGroup(book_key=book_key, source_type='manual', description=f'{tag} change', created_at=when)
+    session.add(group)
+    session.flush()
+    change = MetadataChange(change_group_id=group.id, book_key=book_key, file_path=file_path, tag_name=tag, old_value=old, new_value=new, source_type='manual')
+    session.add(change)
+    session.commit()
+    return group, change
+
+
+def test_list_change_groups_newest_first():
+    session = _memory_session()
+    old, newer = datetime.utcnow() - timedelta(days=1), datetime.utcnow()
+    first, _ = _add_change(session, 'book', 'a.mp3', 'title', 'Old', 'New', old)
+    second, _ = _add_change(session, 'book', 'a.mp3', 'author', 'A', 'B', newer)
+    groups = list_change_groups_for_file(session, 'book', 'a.mp3')
+    assert [item.group.id for item in groups] == [second.id, first.id]
+    assert [item.changed_field_count for item in groups] == [1, 1]
+
+
+def test_restore_one_selected_tag_builds_update():
+    meta = AudioFileMetadata(path='a.mp3', title='New', author='Same')
+    change = MetadataChange(change_group_id=1, book_key='book', file_path='a.mp3', tag_name='title', old_value='Old', new_value='New', source_type='manual')
+    assert build_restore_updates(meta, [change]) == {'title': 'Old'}
+
+
+def test_restore_multiple_selected_tags_normalizes_values():
+    meta = AudioFileMetadata(path='a.mp3', title='New', explicit=True, genres=['New'])
+    changes = [
+        MetadataChange(change_group_id=1, book_key='book', file_path='a.mp3', tag_name='title', old_value='Old', new_value='New', source_type='manual'),
+        MetadataChange(change_group_id=1, book_key='book', file_path='a.mp3', tag_name='explicit', old_value='false', new_value='true', source_type='manual'),
+        MetadataChange(change_group_id=1, book_key='book', file_path='a.mp3', tag_name='genres', old_value='Fantasy\\Adventure', new_value='New', source_type='manual'),
+    ]
+    assert build_restore_updates(meta, changes) == {'title': 'Old', 'explicit': False, 'genres': 'Fantasy\\\\Adventure'}
+
+
+def test_unchecked_tags_are_untouched_by_restore(monkeypatch):
+    session = _memory_session()
+    _, title_change = _add_change(session, 'book', 'a.mp3', 'title', 'Old', 'New', datetime.utcnow())
+    _add_change(session, 'book', 'a.mp3', 'author', 'Old Author', 'New Author', datetime.utcnow())
+    meta = AudioFileMetadata(path='a.mp3', title='New', author='New Author')
+    written = {}
+    monkeypatch.setattr('metadata_collector.history_restore.write_audio_metadata', lambda path, updates: written.update(updates))
+    monkeypatch.setattr('metadata_collector.history_restore.read_audio_metadata', lambda path: AudioFileMetadata(path=path, title='Old', author='New Author'))
+    restore_selected_metadata(session, 'book', meta, [title_change])
+    assert written == {'title': 'Old'}
+
+
+def test_empty_old_value_restores_correctly():
+    meta = AudioFileMetadata(path='a.mp3', title='New')
+    change = MetadataChange(change_group_id=1, book_key='book', file_path='a.mp3', tag_name='title', old_value='', new_value='New', source_type='manual')
+    assert build_restore_updates(meta, [change]) == {'title': ''}
+
+
+def test_restore_action_creates_new_history_records(monkeypatch):
+    session = _memory_session()
+    _, change = _add_change(session, 'book', 'a.mp3', 'title', 'Old', 'New', datetime.utcnow())
+    meta = AudioFileMetadata(path='a.mp3', title='New')
+    monkeypatch.setattr('metadata_collector.history_restore.write_audio_metadata', lambda path, updates: None)
+    monkeypatch.setattr('metadata_collector.history_restore.read_audio_metadata', lambda path: AudioFileMetadata(path=path, title='Old'))
+    group, changes = restore_selected_metadata(session, 'book', meta, [change])
+    assert group.source_type == 'restore'
+    rows = session.query(MetadataChange).filter_by(change_group_id=group.id).all()
+    assert len(rows) == 1
+    assert rows[0].tag_name == 'title'
+    assert rows[0].old_value == 'New'
+    assert rows[0].new_value == 'Old'
+    assert changes == {'title': ('New', 'Old')}
+
+
+def test_cover_restore_disabled():
+    assert not is_restore_supported('cover_data_uri')
+    assert not is_restore_supported('has_cover')
+    meta = AudioFileMetadata(path='a.mp3', has_cover=True)
+    change = MetadataChange(change_group_id=1, book_key='book', file_path='a.mp3', tag_name='cover_data_uri', old_value='data:image/png;base64,abc', new_value='', source_type='manual')
+    assert build_restore_updates(meta, [change]) == {}
