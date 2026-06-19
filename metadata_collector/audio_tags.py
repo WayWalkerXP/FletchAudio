@@ -1,4 +1,5 @@
 from __future__ import annotations
+import ast
 import base64
 import requests
 
@@ -8,6 +9,39 @@ from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 from .models import AudioFileMetadata
 
 NON_WRITABLE_FIELDS = {'duration', 'has_cover', 'cover_data_uri'}
+
+
+def format_genres_for_tag(genres) -> str | None:
+    def normalize_many(values):
+        out = []
+        seen = set()
+        for item in values:
+            if item is None:
+                continue
+            text = str(item).strip()
+            if not text or text in seen:
+                continue
+            out.append(text)
+            seen.add(text)
+        return "\\".join(out) or None
+
+    if genres is None:
+        return None
+    if isinstance(genres, (list, tuple)):
+        return normalize_many(genres)
+    if isinstance(genres, str):
+        text = genres.strip()
+        if not text:
+            return None
+        if text.startswith('[') and text.endswith(']'):
+            try:
+                parsed = ast.literal_eval(text)
+            except (SyntaxError, ValueError):
+                return genres
+            if isinstance(parsed, (list, tuple)):
+                return normalize_many(parsed)
+        return genres
+    return str(genres).strip() or None
 
 
 def normalize_tag_value(value):
@@ -122,10 +156,13 @@ def read_audio_metadata(path: str) -> AudioFileMetadata:
     return m
 
 def diff_metadata(current: AudioFileMetadata, updates: dict) -> dict:
-    return {k:v for k,v in updates.items() if k not in NON_WRITABLE_FIELDS and v not in (None, []) and hasattr(current,k) and getattr(current,k)!=v}
+    normalized_updates = dict(updates)
+    if 'genres' in normalized_updates:
+        normalized_updates['genres'] = format_genres_for_tag(normalized_updates['genres'])
+    return {k:v for k,v in normalized_updates.items() if k not in NON_WRITABLE_FIELDS and v not in (None, []) and hasattr(current,k) and (format_genres_for_tag(getattr(current,k)) if k == 'genres' else getattr(current,k))!=v}
 
 def write_audio_metadata(path: str, updates: dict):
-    updates={k:v for k,v in updates.items() if k not in NON_WRITABLE_FIELDS}
+    updates={k:(format_genres_for_tag(v) if k == 'genres' else v) for k,v in updates.items() if k not in NON_WRITABLE_FIELDS}
     if not updates:
         return
     audio=File(path, easy=False)
