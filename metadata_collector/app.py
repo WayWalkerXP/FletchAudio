@@ -2,6 +2,8 @@ import logging
 
 import flet as ft
 
+IMAGE_CONTAIN_FIT = getattr(getattr(ft, 'ImageFit', None) or ft.BoxFit, 'CONTAIN')
+
 from .audible_client import AudibleClient, asin_url, build_title_author_query, parse_search_results, runtime_difference_minutes, search_url, sort_results_by_runtime_match
 from .config import load_settings, save_settings
 from .db import init_db, get_session_factory
@@ -103,7 +105,7 @@ def main(page: ft.Page):
             if field == 'cover_url':
                 controls=[selected[field]]
                 if value:
-                    controls.append(ft.Image(src=value, width=64, height=64, fit=ft.ImageFit.CONTAIN))
+                    controls.append(ft.Image(src=value, width=64, height=64, fit=IMAGE_CONTAIN_FIT))
                     controls.append(ft.Text(value, selectable=True, width=220, no_wrap=False))
                 else:
                     controls.append(ft.Text('Missing', width=300))
