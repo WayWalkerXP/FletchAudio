@@ -1,6 +1,7 @@
 from __future__ import annotations
 import ast
 import base64
+import re
 import requests
 
 from mutagen import File
@@ -23,7 +24,7 @@ def format_genres_for_tag(genres) -> str | None:
                 continue
             out.append(text)
             seen.add(text)
-        return "\\".join(out) or None
+        return "\\\\".join(out) or None
 
     if genres is None:
         return None
@@ -40,7 +41,7 @@ def format_genres_for_tag(genres) -> str | None:
                 return genres
             if isinstance(parsed, (list, tuple)):
                 return normalize_many(parsed)
-        return genres
+        return re.sub(r'\\+', r'\\\\', text)
     return str(genres).strip() or None
 
 
