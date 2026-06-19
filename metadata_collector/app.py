@@ -13,7 +13,7 @@ from .audio_scan import scan_directory
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
 from .history import create_change_group, log_changes, store_snapshot
 from .metadata_map import normalize_response
-from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_manual_metadata_diff, filter_manual_updates_for_file, manual_changed_fields, manual_current_value, manual_edit_file_label, sorted_manual_edit_files
+from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, sorted_manual_edit_files
 logging.basicConfig(level=logging.INFO)
 
 def main(page: ft.Page):
@@ -307,6 +307,7 @@ def main(page: ft.Page):
     def show_manual_edit(book):
         edit_files=sorted_manual_edit_files(book.files) if book.is_folder_book else list(book.files)
         selected_file={'meta': edit_files[0]}
+        baseline_values={'values': build_baseline_values(edit_files[0])}
         controls={}
         current_cells={}
         file_buttons={}
@@ -328,6 +329,13 @@ def main(page: ft.Page):
             return ft.Image(src=meta.cover_data_uri, width=64, height=64, fit=IMAGE_CONTAIN_FIT) if meta.cover_data_uri else ft.Text('Missing', width=120)
         def edited_values():
             return {field: (bool(control.value) if isinstance(control, ft.Checkbox) else control.value) for field, control in controls.items()}
+        def build_edit_values_from_controls():
+            return edited_values()
+        def has_unsaved_changes():
+            changed_fields=changed_edit_fields(baseline_values['values'], build_edit_values_from_controls(), cover_state)
+            if changed_fields:
+                logging.debug('Dirty fields:\n%s', '\n'.join(f"  {field}: baseline={old!r} edited={new!r}" for field, (old, new) in changed_fields.items()))
+            return bool(changed_fields)
         def refresh_cover_preview():
             meta=current_file()
             cover_preview.controls.clear()
@@ -347,8 +355,9 @@ def main(page: ft.Page):
             cover_preview.controls.append(cover_note)
         def load_file(meta):
             selected_file['meta']=meta
+            baseline_values['values']=build_baseline_values(meta)
             for field, control in controls.items():
-                value=manual_current_value(meta, field)
+                value=baseline_values['values'].get(field, '')
                 if isinstance(control, ft.Checkbox):
                     control.value=bool(value) if value is not None and value != '' else False
                 else:
@@ -399,7 +408,7 @@ def main(page: ft.Page):
                 control=ft.TextField(value=str(value), width=320)
             controls[field]=control
             return control
-        async def save_selected(close_after=True):
+        async def save_selected(close_after=False):
             save_button.disabled=True
             page.update()
             saving_dialog=ft.AlertDialog(modal=True, title=ft.Text('Saving metadata changes...'), content=ft.Column([ft.ProgressRing(), ft.Text('Writing tags. Please wait...')], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER))
@@ -423,13 +432,15 @@ def main(page: ft.Page):
                     log_changes(session, group, book.key, meta.path, changes, MANUAL_EDIT_SOURCE_TYPE)
                     session.commit()
                 close_dialog(saving_dialog)
-                show_success('Metadata changes saved.')
-                show_status('Metadata changes saved.')
                 if close_after:
                     close_dialog(dialog)
                     render()
                 else:
                     load_file(meta)
+                    show_success('Metadata changes saved.')
+                    show_status('Metadata changes saved.')
+                    save_button.disabled=False
+                    page.update()
                 return True
             except Exception as exc:
                 close_dialog(saving_dialog)
@@ -442,9 +453,7 @@ def main(page: ft.Page):
         def request_file_switch(next_meta):
             if next_meta is current_file():
                 return
-            changed_fields=manual_changed_fields(current_file(), edited_values(), cover_state)
-            logging.debug('Manual edit dirty check for %s: changed fields=%s', current_file().path, changed_fields)
-            if not changed_fields:
+            if not has_unsaved_changes():
                 load_file(next_meta)
                 return
             unsaved_dialog=None
@@ -483,9 +492,52 @@ def main(page: ft.Page):
             current_cells[field]=current
             rows.append(ft.Container(content=ft.Row([cell(ft.Text(label, weight=ft.FontWeight.W_500), 170), cell(edit, 380, column_border), current], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START), border=row_border))
         def revert(_):
-            load_file(current_file())
+            for field, control in controls.items():
+                value=baseline_values['values'].get(field, '')
+                if isinstance(control, ft.Checkbox):
+                    control.value=bool(value) if value is not None and value != '' else False
+                else:
+                    control.value=str(value)
+            cover_state.path=None
+            cover_state.delete=False
+            refresh_cover_preview()
+            page.update()
         async def save(_):
-            await save_selected(close_after=True)
+            await save_selected(close_after=False)
+        def close_editor():
+            close_dialog(dialog)
+            render()
+        def confirm_discard_and_close():
+            confirm_dialog=ft.AlertDialog(
+                modal=True,
+                title=ft.Text('Discard unsaved changes?'),
+                content=ft.Text('Discard unsaved changes?'),
+                actions=[ft.TextButton('Keep Editing', on_click=lambda e: close_dialog(confirm_dialog)), ft.FilledButton('Discard', on_click=lambda e: (close_dialog(confirm_dialog), close_editor()))],
+            )
+            open_dialog(confirm_dialog)
+        def cancel_editor(_):
+            if has_unsaved_changes():
+                confirm_discard_and_close()
+            else:
+                close_editor()
+        def exit_editor(_):
+            if not has_unsaved_changes():
+                close_editor()
+                return
+            exit_dialog=None
+            async def save_and_exit(_):
+                close_dialog(exit_dialog)
+                await save_selected(close_after=True)
+            def discard_and_exit(_):
+                close_dialog(exit_dialog)
+                close_editor()
+            exit_dialog=ft.AlertDialog(
+                modal=True,
+                title=ft.Text('Unsaved changes'),
+                content=ft.Text('You have unsaved changes. What would you like to do?'),
+                actions=[ft.FilledButton('Save and Exit', on_click=save_and_exit), ft.TextButton('Discard and Exit', on_click=discard_and_exit), ft.TextButton('Cancel', on_click=lambda e: close_dialog(exit_dialog))],
+            )
+            open_dialog(exit_dialog)
         form=ft.Column(rows, scroll=ft.ScrollMode.AUTO, height=560, width=860, spacing=0)
         content=form
         if book.is_folder_book:
@@ -498,8 +550,18 @@ def main(page: ft.Page):
         dialog=ft.AlertDialog(
             title=ft.Column([ft.Text('Edit Metadata'), ft.Text(book.display_name, size=12, selectable=True)]),
             content=content,
-            actions=[ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog)), ft.TextButton('Revert', on_click=revert), (save_button := ft.FilledButton('Save', on_click=save))],
+            actions=[
+                ft.Row(
+                    [
+                        ft.TextButton('Exit', on_click=exit_editor),
+                        ft.Row([ft.FilledButton('Save', on_click=save), ft.TextButton('Revert', on_click=revert), ft.TextButton('Cancel', on_click=cancel_editor)], spacing=8),
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    width=860,
+                )
+            ],
         )
+        save_button=dialog.actions[0].controls[1].controls[0]
         open_dialog(dialog)
     def render():
         grid.controls.clear()
