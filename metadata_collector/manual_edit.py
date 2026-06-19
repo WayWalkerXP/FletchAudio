@@ -106,6 +106,37 @@ def build_manual_metadata_diff(current: AudioFileMetadata, edited: dict[str, Any
     return updates
 
 
+
+def manual_edit_file_sort_key(meta: AudioFileMetadata) -> tuple[int, int, str]:
+    filename = meta.path.rsplit('/', 1)[-1].lower()
+    if meta.track is None:
+        return (1, 0, filename)
+    return (0, int(meta.track), filename)
+
+
+def sorted_manual_edit_files(files: list[AudioFileMetadata]) -> list[AudioFileMetadata]:
+    return sorted(files, key=manual_edit_file_sort_key)
+
+
+def manual_edit_file_label(meta: AudioFileMetadata) -> str:
+    filename = meta.path.rsplit('/', 1)[-1]
+    return f'{meta.track}. {filename}' if meta.track is not None else filename
+
+
+def has_manual_unsaved_changes(current: AudioFileMetadata, edited: dict[str, Any], cover_state: CoverEditState | None = None) -> bool:
+    return bool(build_manual_metadata_diff(current, edited, cover_state))
+
+
+def should_switch_manual_file(has_unsaved_changes: bool, decision: str | None) -> tuple[bool, bool]:
+    if not has_unsaved_changes:
+        return (True, False)
+    if decision == 'save':
+        return (True, True)
+    if decision == 'discard':
+        return (True, False)
+    return (False, False)
+
+
 def filter_manual_updates_for_file(book_is_folder: bool, updates: dict[str, Any]) -> dict[str, Any]:
     if not book_is_folder:
         return dict(updates)

@@ -1,6 +1,15 @@
 import pytest
 
-from metadata_collector.manual_edit import CoverEditState, build_manual_metadata_diff, filter_manual_updates_for_file
+from metadata_collector.manual_edit import (
+    CoverEditState,
+    build_manual_metadata_diff,
+    filter_manual_updates_for_file,
+    has_manual_unsaved_changes,
+    manual_current_value,
+    manual_edit_file_label,
+    should_switch_manual_file,
+    sorted_manual_edit_files,
+)
 from metadata_collector.models import AudioFileMetadata
 
 
@@ -75,3 +84,43 @@ def test_folder_manual_updates_exclude_file_level_title_track_disc():
     updates = {'album': 'Album', 'title': 'Track title', 'track': '1', 'disc': '2'}
 
     assert filter_manual_updates_for_file(True, updates) == {'album': 'Album'}
+
+
+def test_manual_edit_detects_unsaved_text_and_cover_changes():
+    current = AudioFileMetadata('/tmp/book.mp3', title='Old', has_cover=True, cover_data_uri='data:image/jpeg;base64,old')
+
+    assert not has_manual_unsaved_changes(current, {'title': 'Old'}, CoverEditState())
+    assert has_manual_unsaved_changes(current, {'title': 'New'}, CoverEditState())
+    assert has_manual_unsaved_changes(current, {'title': 'Old'}, CoverEditState(delete=True))
+
+
+def test_folder_manual_edit_files_sort_by_track_then_filename():
+    files = [
+        AudioFileMetadata('/book/b.mp3'),
+        AudioFileMetadata('/book/02.mp3', track=2),
+        AudioFileMetadata('/book/01.mp3', track=1),
+        AudioFileMetadata('/book/a.mp3'),
+    ]
+
+    assert [file.path for file in sorted_manual_edit_files(files)] == ['/book/01.mp3', '/book/02.mp3', '/book/a.mp3', '/book/b.mp3']
+    assert manual_edit_file_label(files[2]) == '1. 01.mp3'
+
+
+def test_switching_with_no_unsaved_changes_switches_without_save():
+    assert should_switch_manual_file(False, None) == (True, False)
+
+
+def test_switch_decision_save_discard_cancel_behavior():
+    assert should_switch_manual_file(True, 'save') == (True, True)
+    assert should_switch_manual_file(True, 'discard') == (True, False)
+    assert should_switch_manual_file(True, 'cancel') == (False, False)
+    assert should_switch_manual_file(True, None) == (False, False)
+
+
+def test_selected_file_metadata_loading_uses_selected_file_values():
+    first = AudioFileMetadata('/book/01.mp3', title='One', track=1, genres=['A'])
+    second = AudioFileMetadata('/book/02.mp3', title='Two', track=2, genres=['B', 'C'])
+
+    assert manual_current_value(first, 'title') == 'One'
+    assert manual_current_value(second, 'title') == 'Two'
+    assert manual_current_value(second, 'genres') == r'B\\C'
