@@ -21,7 +21,8 @@ def main(page: ft.Page):
         page.update()
     def apply_theme(e):
         settings['theme']=theme.value; save_settings(settings); page.theme_mode={'Light':ft.ThemeMode.LIGHT,'Dark':ft.ThemeMode.DARK}.get(theme.value, ft.ThemeMode.SYSTEM); page.update()
-    theme=ft.Dropdown(label='Theme', value=settings.get('theme','System'), options=[ft.dropdown.Option(x) for x in ['System','Light','Dark']], on_change=apply_theme)
+    theme=ft.Dropdown(label='Theme', value=settings.get('theme','System'), options=[ft.dropdown.Option(x) for x in ['System','Light','Dark']])
+    theme.on_change=apply_theme
     picker=ft.FilePicker(on_result=lambda e: scan(e.path) if e.path else None); page.overlay.append(picker)
     def scan(path=None):
         nonlocal books
