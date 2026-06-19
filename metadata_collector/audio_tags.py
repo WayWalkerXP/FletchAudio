@@ -1,8 +1,12 @@
 from __future__ import annotations
+import base64
+
 from mutagen import File
 from mutagen.id3 import ID3, TIT2, TALB, TPE1, TPE2, TCOM, TCON, TDRC, TPUB, COMM, TXXX, TRCK, TPOS
-from mutagen.mp4 import MP4, MP4FreeForm
+from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 from .models import AudioFileMetadata
+
+NON_WRITABLE_FIELDS = {'duration', 'has_cover', 'cover_data_uri'}
 
 
 def normalize_tag_value(value):
@@ -50,6 +54,28 @@ def _text(tags,*keys):
             return normalize_tag_value(tags[k])
     return None
 
+
+def _data_uri(data, mime_type):
+    if not data:
+        return None
+    return f'data:{mime_type};base64,{base64.b64encode(bytes(data)).decode("ascii")}'
+
+def _mp4_cover_data_uri(tags):
+    covers = tags.get('covr') if tags else None
+    if not covers:
+        return None
+    cover = covers[0]
+    mime_type = 'image/png' if getattr(cover, 'imageformat', None) == MP4Cover.FORMAT_PNG else 'image/jpeg'
+    return _data_uri(cover, mime_type)
+
+def _id3_cover_data_uri(tags):
+    if not tags:
+        return None
+    for key, frame in tags.items():
+        if str(key).startswith('APIC') and getattr(frame, 'data', None):
+            return _data_uri(frame.data, getattr(frame, 'mime', None) or 'image/jpeg')
+    return None
+
 def read_audio_metadata(path: str) -> AudioFileMetadata:
     audio=File(path, easy=False)
     m=AudioFileMetadata(path=path)
@@ -62,18 +88,21 @@ def read_audio_metadata(path: str) -> AudioFileMetadata:
         m.publisher=_text(tags,'----:com.apple.iTunes:PUBLISHER'); m.published_date=_text(tags,'©day'); m.published_year=(m.published_date or '')[:4] or None
         m.language=_text(tags,'----:com.apple.iTunes:LANGUAGE'); m.series=_text(tags,'----:com.apple.iTunes:SERIES'); m.series_sequence=_text(tags,'----:com.apple.iTunes:SERIES-PART','----:com.apple.iTunes:series_part')
         m.asin=_text(tags,'----:com.apple.iTunes:ASIN'); genre=normalize_tag_value(tags.get('©gen')); m.genres=genre.split(', ') if genre else []; m.track=(tags.get('trkn') or [(None,None)])[0][0]; m.disc=(tags.get('disk') or [(None,None)])[0][0]
-        m.has_cover='covr' in tags; m.dramatic_audio=(_text(tags,'----:com.apple.iTunes:dramatic_audio') or '').lower()=='true'
+        m.has_cover='covr' in tags; m.cover_data_uri=_mp4_cover_data_uri(tags); m.dramatic_audio=(_text(tags,'----:com.apple.iTunes:dramatic_audio') or '').lower()=='true'
     else:
         m.title=_text(tags,'TIT2'); m.album=_text(tags,'TALB'); m.author=_text(tags,'TPE1'); m.albumartist=_text(tags,'TPE2'); m.narrator=_text(tags,'TCOM') or _text(tags,'TXXX:NARRATOR')
         m.description=_text(tags,'COMM::XXX','COMM'); m.publisher=_text(tags,'TPUB'); m.published_date=_text(tags,'TDRC'); m.published_year=(m.published_date or '')[:4] or None
         m.language=_text(tags,'TLAN'); m.series=_text(tags,'TXXX:SERIES'); m.series_sequence=_text(tags,'TXXX:SERIES-PART','TXXX:series_part'); m.asin=_text(tags,'TXXX:ASIN')
-        g=_text(tags,'TCON'); m.genres=g.split(', ') if g else []; m.track=_int_part(_text(tags,'TRCK')); m.disc=_int_part(_text(tags,'TPOS')); m.has_cover=any(str(k).startswith('APIC') for k in tags.keys())
+        g=_text(tags,'TCON'); m.genres=g.split(', ') if g else []; m.track=_int_part(_text(tags,'TRCK')); m.disc=_int_part(_text(tags,'TPOS')); m.has_cover=any(str(k).startswith('APIC') for k in tags.keys()); m.cover_data_uri=_id3_cover_data_uri(tags)
     return m
 
 def diff_metadata(current: AudioFileMetadata, updates: dict) -> dict:
-    return {k:v for k,v in updates.items() if v not in (None, []) and hasattr(current,k) and getattr(current,k)!=v}
+    return {k:v for k,v in updates.items() if k not in NON_WRITABLE_FIELDS and v not in (None, []) and hasattr(current,k) and getattr(current,k)!=v}
 
 def write_audio_metadata(path: str, updates: dict):
+    updates={k:v for k,v in updates.items() if k not in NON_WRITABLE_FIELDS}
+    if not updates:
+        return
     audio=File(path, easy=False)
     if audio is None: raise ValueError(f'Unsupported audio file: {path}')
     if isinstance(audio, MP4):
