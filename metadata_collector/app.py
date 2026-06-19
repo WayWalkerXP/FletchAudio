@@ -799,7 +799,7 @@ def main(page: ft.Page):
                 width=width,
                 expand=expand,
                 padding=ft.padding.symmetric(horizontal=4),
-                alignment=ft.alignment.center_left,
+                alignment=ft.Alignment(-1, 0),
             )
 
         def toggle_book_expansion(book):
@@ -816,7 +816,7 @@ def main(page: ft.Page):
                 ft.Container(
                     content=ft.IconButton(icon=ft.Icons.EDIT, tooltip='Edit metadata', on_click=lambda e, book=book: show_manual_edit(book)),
                     width=48,
-                    alignment=ft.alignment.center,
+                    alignment=ft.Alignment(0, 0),
                 ),
                 text_cell(book.display_name, expand=2, weight=ft.FontWeight.BOLD),
                 text_cell(first.title, expand=2),
@@ -832,7 +832,7 @@ def main(page: ft.Page):
                         on_click=lambda e, book=book: toggle_book_expansion(book),
                     ) if book.is_folder_book else ft.Container(),
                     width=42,
-                    alignment=ft.alignment.center,
+                    alignment=ft.Alignment(0, 0),
                 ),
             ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
