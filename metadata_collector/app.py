@@ -5,6 +5,12 @@ import logging
 import flet as ft
 
 IMAGE_CONTAIN_FIT = getattr(getattr(ft, 'ImageFit', None) or ft.BoxFit, 'CONTAIN')
+THEME_OPTIONS = ('System', 'Light', 'Dark')
+THEME_MODES = {'Light': ft.ThemeMode.LIGHT, 'Dark': ft.ThemeMode.DARK}
+
+def theme_mode_for_setting(setting):
+    return THEME_MODES.get(setting, ft.ThemeMode.SYSTEM)
+
 
 def padding_symmetric(*, horizontal=0, vertical=0):
     return ft.Padding(left=horizontal, right=horizontal, top=vertical, bottom=vertical)
@@ -29,7 +35,7 @@ logging.basicConfig(level=logging.INFO)
 
 def main(page: ft.Page):
     engine=init_db(); Session=get_session_factory(engine); settings=load_settings(); books=[]
-    page.title='FletchAudio'; page.theme_mode={'Light':ft.ThemeMode.LIGHT,'Dark':ft.ThemeMode.DARK}.get(settings.get('theme'), ft.ThemeMode.SYSTEM)
+    page.title='FletchAudio'; page.theme_mode=theme_mode_for_setting(settings.get('theme'))
     status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); url_launcher=ft.UrlLauncher(); audible=AudibleClient()
     if hasattr(page, 'services'):
         page.services.append(url_launcher)
@@ -907,9 +913,13 @@ def main(page: ft.Page):
         show_success(f'Compacted database: {before} → {after}. Cleaned {result.get("snapshots", 0)} snapshots and {result.get("changes", 0)} change records.')
         show_status(f'Database compacted: {before} → {after}.')
     def apply_theme(e):
-        settings['theme']=theme.value; save_settings(settings); page.theme_mode={'Light':ft.ThemeMode.LIGHT,'Dark':ft.ThemeMode.DARK}.get(theme.value, ft.ThemeMode.SYSTEM); page.update()
-    theme=ft.Dropdown(label='Theme', value=settings.get('theme','System'), options=[ft.dropdown.Option(x) for x in ['System','Light','Dark']])
-    theme.on_change=apply_theme
+        selected_theme = getattr(getattr(e, 'control', None), 'value', None) or theme.value or 'System'
+        settings['theme']=selected_theme; save_settings(settings); page.theme_mode=theme_mode_for_setting(selected_theme); page.update()
+    theme=ft.Dropdown(label='Theme', value=settings.get('theme','System'), options=[ft.dropdown.Option(x) for x in THEME_OPTIONS])
+    if hasattr(theme, 'on_select'):
+        theme.on_select=apply_theme
+    if hasattr(theme, 'on_change'):
+        theme.on_change=apply_theme
     async def select_working_directory(e):
         picker=create_file_picker()
         path = await maybe_await(picker.get_directory_path())
