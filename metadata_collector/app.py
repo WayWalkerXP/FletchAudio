@@ -8,6 +8,44 @@ IMAGE_CONTAIN_FIT = getattr(getattr(ft, 'ImageFit', None) or ft.BoxFit, 'CONTAIN
 THEME_OPTIONS = ('System', 'Light', 'Dark')
 THEME_MODES = {'Light': ft.ThemeMode.LIGHT, 'Dark': ft.ThemeMode.DARK}
 
+
+VALID_TARGET_BITRATES = {'32', '48', '64', '96', '128', '256', '384'}
+VALID_TARGET_CHANNELS = {'1', '2'}
+TARGET_STATUS_TOOLTIPS = {
+    'green': 'Targets configured',
+    'red': 'Target bitrate and/or channels not configured',
+    'yellow': 'Target settings are inconsistent across files',
+}
+TARGET_STATUS_COLORS = {
+    'green': ft.Colors.GREEN,
+    'red': ft.Colors.RED,
+    'yellow': ft.Colors.AMBER,
+}
+
+
+def normalize_target_int(value):
+    if value is None:
+        return None
+    try:
+        return str(int(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def target_settings_status(book):
+    bitrate_values=[]
+    channel_values=[]
+    for file_meta in book.files:
+        bitrate=normalize_target_int(getattr(file_meta, 'target_bitrate', None))
+        channels=normalize_target_int(getattr(file_meta, 'target_channels', None))
+        if bitrate not in VALID_TARGET_BITRATES or channels not in VALID_TARGET_CHANNELS:
+            return 'red'
+        bitrate_values.append(bitrate)
+        channel_values.append(channels)
+    if book.is_folder_book and (len(set(bitrate_values)) > 1 or len(set(channel_values)) > 1):
+        return 'yellow'
+    return 'green'
+
 def theme_mode_for_setting(setting):
     return THEME_MODES.get(setting, ft.ThemeMode.SYSTEM)
 
@@ -666,20 +704,15 @@ def main(page: ft.Page):
         save_button=dialog.actions[0].controls[1].controls[0]
         open_dialog(dialog)
     def show_set_targets(book):
-        valid_bitrates=('32', '48', '64', '96', '128', '256', '384')
-        valid_channels=('1', '2')
+        valid_bitrates=tuple(sorted(VALID_TARGET_BITRATES, key=int))
+        valid_channels=tuple(sorted(VALID_TARGET_CHANNELS, key=int))
         source_type='set_targets'
         divider_color=ft.Colors.OUTLINE_VARIANT
         row_border=ft.Border(bottom=ft.BorderSide(1, divider_color))
         column_border=ft.Border(left=ft.BorderSide(1, divider_color))
 
         def normalize_int_text(value):
-            if value is None:
-                return None
-            try:
-                return str(int(str(value).strip()))
-            except (TypeError, ValueError):
-                return None
+            return normalize_target_int(value)
 
         def normalize_bool_value(value):
             if isinstance(value, bool):
@@ -995,9 +1028,11 @@ def main(page: ft.Page):
 
         def book_actions_row(book):
             # Keep the canonical title/author search wiring intact: ft.Button('Search by Title & Author', on_click=create_title_author_search_handler(b))
+            target_status=target_settings_status(book)
+            target_button=ft.Button('Set Targets', on_click=lambda e, book=book: show_set_targets(book), bgcolor=TARGET_STATUS_COLORS[target_status], color=ft.Colors.WHITE, tooltip=TARGET_STATUS_TOOLTIPS[target_status])
             actions=[
                 ft.Button('Restore / Review History', on_click=lambda e, book=book: show_metadata_history(book)),
-                ft.Button('Set Targets', on_click=lambda e, book=book: show_set_targets(book)),
+                target_button,
                 ft.Button('Search by Title & Author', on_click=create_title_author_search_handler(book)),
                 ft.Button('Search by ASIN', on_click=create_asin_search_handler(book)),
             ]
