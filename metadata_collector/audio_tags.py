@@ -181,11 +181,11 @@ def read_audio_metadata(path: str) -> AudioFileMetadata:
         m.publisher=_text(tags,'----:com.apple.iTunes:PUBLISHER'); m.published_date=_text(tags,'©day'); m.published_year=(m.published_date or '')[:4] or None
         m.language=_text(tags,'----:com.apple.iTunes:LANGUAGE'); m.series=_text(tags,'----:com.apple.iTunes:SERIES'); m.series_sequence=_text(tags,'----:com.apple.iTunes:SERIES-PART','----:com.apple.iTunes:series_part')
         m.asin=_text(tags,'----:com.apple.iTunes:ASIN'); genre=normalize_tag_value(tags.get('©gen')); m.genres=genre.split(', ') if genre else []; m.track=(tags.get('trkn') or [(None,None)])[0][0]; m.disc=(tags.get('disk') or [(None,None)])[0][0]
-        m.has_cover='covr' in tags; m.cover_data_uri=_mp4_cover_data_uri(tags); m.explicit=_bool_text(_text(tags,'----:com.apple.iTunes:EXPLICIT','----:com.apple.iTunes:explicit')); m.dramatic_audio=_bool_text(_text(tags,'----:com.apple.iTunes:DRAMATIC_AUDIO','----:com.apple.iTunes:dramatic_audio'))
+        m.has_cover='covr' in tags; m.cover_data_uri=_mp4_cover_data_uri(tags); m.explicit=_bool_text(_text(tags,'----:com.apple.iTunes:EXPLICIT','----:com.apple.iTunes:explicit')); m.dramatic_audio=_bool_text(_text(tags,'----:com.apple.iTunes:DRAMATIC_AUDIO','----:com.apple.iTunes:dramatic_audio')); m.target_bitrate=_tag_int(_text(tags,'----:com.apple.iTunes:TARGET_BITRATE','----:com.apple.iTunes:target_bitrate')); m.target_channels=_tag_int(_text(tags,'----:com.apple.iTunes:TARGET_CHANNELS','----:com.apple.iTunes:target_channels'))
     else:
         m.title=_text(tags,'TIT2'); m.album=_text(tags,'TALB'); m.author=_text(tags,'TPE1'); m.albumartist=_text(tags,'TPE2'); m.narrator=_text(tags,'TCOM') or _text(tags,'TXXX:NARRATOR')
         m.description=_text(tags,'COMM::XXX','COMM'); m.publisher=_text(tags,'TPUB'); m.published_date=_text(tags,'TDRC'); m.published_year=(m.published_date or '')[:4] or None
-        m.language=_text(tags,'TLAN'); m.series=_text(tags,'TXXX:SERIES'); m.series_sequence=_text(tags,'TXXX:SERIES-PART','TXXX:series_part'); m.asin=_text(tags,'TXXX:ASIN'); m.explicit=_bool_text(_text(tags,'TXXX:EXPLICIT','TXXX:explicit')); m.dramatic_audio=_bool_text(_text(tags,'TXXX:DRAMATIC_AUDIO','TXXX:dramatic_audio'))
+        m.language=_text(tags,'TLAN'); m.series=_text(tags,'TXXX:SERIES'); m.series_sequence=_text(tags,'TXXX:SERIES-PART','TXXX:series_part'); m.asin=_text(tags,'TXXX:ASIN'); m.explicit=_bool_text(_text(tags,'TXXX:EXPLICIT','TXXX:explicit')); m.dramatic_audio=_bool_text(_text(tags,'TXXX:DRAMATIC_AUDIO','TXXX:dramatic_audio')); m.target_bitrate=_tag_int(_text(tags,'TXXX:TARGET_BITRATE','TXXX:target_bitrate')); m.target_channels=_tag_int(_text(tags,'TXXX:TARGET_CHANNELS','TXXX:target_channels'))
         g=_text(tags,'TCON'); m.genres=g.split(', ') if g else []; m.track=_int_part(_text(tags,'TRCK')); m.disc=_int_part(_text(tags,'TPOS')); m.has_cover=any(str(k).startswith('APIC') for k in tags.keys()); m.cover_data_uri=_id3_cover_data_uri(tags)
     return m
 
@@ -233,7 +233,7 @@ def write_audio_metadata(path: str, updates: dict):
                 cover_data, mime_type = _read_cover_source(v)
                 tags['covr'] = [MP4Cover(cover_data, imageformat=_cover_format(mime_type))]
             elif k in mapping: tags[mapping[k]]=v if isinstance(v,list) else [str(v)]
-            elif k in {'series','series_sequence','asin','publisher','language','explicit','dramatic_audio'}: tags[f'----:com.apple.iTunes:{k.upper()}']=[MP4FreeForm(str(v).encode())]
+            elif k in {'series','series_sequence','asin','publisher','language','explicit','dramatic_audio','target_bitrate','target_channels'}: tags[f'----:com.apple.iTunes:{k.upper()}']=[MP4FreeForm(str(v).encode())]
             elif k=='track':
                 parsed=_tag_int(v)
                 if parsed is None: tags.pop('trkn', None)

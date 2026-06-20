@@ -665,6 +665,148 @@ def main(page: ft.Page):
         )
         save_button=dialog.actions[0].controls[1].controls[0]
         open_dialog(dialog)
+    def show_set_targets(book):
+        valid_bitrates=('32', '48', '64', '96', '128', '256', '384')
+        valid_channels=('1', '2')
+        source_type='set_targets'
+        divider_color=ft.Colors.OUTLINE_VARIANT
+        row_border=ft.Border(bottom=ft.BorderSide(1, divider_color))
+        column_border=ft.Border(left=ft.BorderSide(1, divider_color))
+
+        def normalize_int_text(value):
+            if value is None:
+                return None
+            try:
+                return str(int(str(value).strip()))
+            except (TypeError, ValueError):
+                return None
+
+        def normalize_bool_value(value):
+            if isinstance(value, bool):
+                return value
+            if value is None:
+                return None
+            text=str(value).strip().lower()
+            if text in {'true', '1', 'yes', 'y', 'on', 'checked'}:
+                return True
+            if text in {'false', '0', 'no', 'n', 'off', 'unchecked'}:
+                return False
+            return None
+
+        def distinct_values(field):
+            values=[]
+            seen=set()
+            for file_meta in book.files:
+                value=getattr(file_meta, field, None)
+                if value is None or value == '':
+                    continue
+                normalized=normalize_bool_value(value) if field == 'dramatic_audio' else normalize_int_text(value)
+                if normalized is None:
+                    continue
+                key=normalized
+                if key not in seen:
+                    seen.add(key)
+                    values.append(normalized)
+            return values
+
+        def format_current(values):
+            if not values:
+                return 'Not set'
+            return ', '.join('True' if value is True else 'False' if value is False else str(value) for value in values)
+
+        bitrate_values=distinct_values('target_bitrate')
+        channel_values=distinct_values('target_channels')
+        dramatic_values=distinct_values('dramatic_audio')
+        bitrate_prefill=bitrate_values[0] if len(bitrate_values) == 1 and str(bitrate_values[0]) in valid_bitrates else None
+        channel_prefill=channel_values[0] if len(channel_values) == 1 and str(channel_values[0]) in valid_channels else '1'
+        dramatic_prefill=dramatic_values[0] if len(dramatic_values) == 1 else False
+
+        bitrate_dropdown=ft.Dropdown(width=220, value=bitrate_prefill, options=[ft.dropdown.Option(value) for value in valid_bitrates])
+        channels_dropdown=ft.Dropdown(width=220, value=channel_prefill, options=[ft.dropdown.Option(value) for value in valid_channels])
+        dramatic_checkbox=ft.Checkbox(value=bool(dramatic_prefill))
+        error_text=ft.Text('', color=ft.Colors.RED)
+
+        def cell(content, width, border=None, padding=8):
+            if isinstance(content, str):
+                content=ft.Text(content, selectable=True, width=width - (padding * 2), no_wrap=False)
+            return ft.Container(content=content, width=width, padding=padding, border=border)
+
+        rows=[ft.Row([
+            cell(ft.Text('Field', weight=ft.FontWeight.BOLD), 170),
+            cell(ft.Text('Target Value', weight=ft.FontWeight.BOLD), 250, column_border),
+            cell(ft.Text('Current Value', weight=ft.FontWeight.BOLD), 250, column_border),
+        ], spacing=0)]
+        for label, control, current in [
+            ('Bitrate', bitrate_dropdown, format_current(bitrate_values)),
+            ('Channels', channels_dropdown, format_current(channel_values)),
+            ('Dramatic Audio', dramatic_checkbox, format_current(dramatic_values)),
+        ]:
+            rows.append(ft.Container(content=ft.Row([
+                cell(ft.Text(label, weight=ft.FontWeight.W_500), 170),
+                cell(control, 250, column_border),
+                cell(current, 250, column_border),
+            ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START), border=row_border))
+        rows.append(error_text)
+
+        async def save_targets(_):
+            error_text.value=''
+            updates={}
+            bitrate=normalize_int_text(bitrate_dropdown.value)
+            channels=normalize_int_text(channels_dropdown.value) or '1'
+            dramatic=normalize_bool_value(dramatic_checkbox.value)
+            if bitrate_dropdown.value not in (None, '') and bitrate not in valid_bitrates:
+                error_text.value='Bitrate must be one of: ' + ', '.join(valid_bitrates)
+                page.update()
+                return
+            if channels not in valid_channels:
+                error_text.value='Channels must be 1 or 2.'
+                page.update()
+                return
+            if dramatic is None:
+                error_text.value='Dramatic Audio must be True or False.'
+                page.update()
+                return
+            if bitrate:
+                updates['target_bitrate']=int(bitrate)
+            updates['target_channels']=int(channels)
+            updates['dramatic_audio']=dramatic
+            save_button.disabled=True
+            page.update()
+            saving_dialog=ft.AlertDialog(modal=True, title=ft.Text('Saving target settings...'), content=ft.Column([ft.ProgressRing(), ft.Text('Writing tags. Please wait...')], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER))
+            open_dialog(saving_dialog)
+            await asyncio.sleep(0.1)
+            try:
+                with Session() as session:
+                    group=create_change_group(session, book.key, source_type, 'Set target settings')
+                    for file_metadata in book.files:
+                        changes={tag: (getattr(file_metadata, tag, None), new_value) for tag, new_value in metadata_diff(file_metadata, updates).items()}
+                        if not changes:
+                            continue
+                        write_audio_metadata(file_metadata.path, {tag: new for tag, (_, new) in changes.items()})
+                        refreshed=read_audio_metadata(file_metadata.path)
+                        file_metadata.__dict__.update(refreshed.__dict__)
+                        log_changes(session, group, book.key, file_metadata.path, changes, source_type)
+                    session.commit()
+                close_dialog(saving_dialog)
+                close_dialog(dialog)
+                show_success('Target settings saved.')
+                show_status('Target settings saved.')
+                render()
+            except Exception as exc:
+                close_dialog(saving_dialog)
+                save_button.disabled=False
+                error_text.value=f'Failed to save target settings: {exc}'
+                show_status(f'Failed to save target settings for {book.display_name}: {exc}')
+                page.update()
+
+        dialog=ft.AlertDialog(
+            modal=True,
+            title=ft.Column([ft.Text('Set Targets and Dramatic Audio'), ft.Text(book.display_name, size=12, selectable=True)]),
+            content=ft.Column(rows, scroll=ft.ScrollMode.AUTO, height=260, width=670, spacing=0),
+            actions=[(save_button := ft.FilledButton('Save', on_click=save_targets)), ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog))],
+        )
+        open_dialog(dialog)
+
     def show_metadata_history(book):
         history_files=sorted_manual_edit_files(book.files) if book.is_folder_book else list(book.files)
         files_by_path={file_meta.path: file_meta for file_meta in history_files}
@@ -855,6 +997,7 @@ def main(page: ft.Page):
             # Keep the canonical title/author search wiring intact: ft.Button('Search by Title & Author', on_click=create_title_author_search_handler(b))
             actions=[
                 ft.Button('Restore / Review History', on_click=lambda e, book=book: show_metadata_history(book)),
+                ft.Button('Set Targets', on_click=lambda e, book=book: show_set_targets(book)),
                 ft.Button('Search by Title & Author', on_click=create_title_author_search_handler(book)),
                 ft.Button('Search by ASIN', on_click=create_asin_search_handler(book)),
             ]
