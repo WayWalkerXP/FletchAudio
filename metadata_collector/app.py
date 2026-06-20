@@ -116,6 +116,60 @@ def main(page: ft.Page):
             if overlay and dialog in overlay:
                 overlay.remove(dialog)
         page.update()
+
+    def open_progress_dialog(message):
+        dialog=ft.AlertDialog(
+            modal=True,
+            title=ft.Text(message),
+            content=ft.Column([
+                ft.ProgressRing(),
+                ft.Text('Writing tags. Please wait...'),
+            ], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+        )
+        open_dialog(dialog)
+        return dialog
+
+    def refresh_books_from_disk():
+        nonlocal books
+        path=settings.get('working_directory')
+        if not path:
+            render()
+            return
+        refreshed_books, errors=scan_directory(path)
+        books=refreshed_books
+        for err in errors:
+            logging.warning(err)
+        render()
+
+    async def run_modal_save_flow(current_dialog, progress_message, save_operation, success_message, error_title, error_message):
+        close_dialog(current_dialog)
+        page.update()
+        progress_dialog=open_progress_dialog(progress_message)
+        page.update()
+        # Yield to Flet so the dismissed edit modal is removed before the progress modal is shown.
+        await asyncio.sleep(0.1)
+        try:
+            result=save_operation()
+            if inspect.isawaitable(result):
+                await result
+            close_dialog(progress_dialog)
+            page.update()
+            refresh_books_from_disk()
+            show_success(success_message)
+            show_status(success_message)
+            return True
+        except Exception as exc:
+            close_dialog(progress_dialog)
+            page.update()
+            error_dialog=ft.AlertDialog(
+                modal=True,
+                title=ft.Text(error_title),
+                content=ft.Text(error_message(exc)),
+                actions=[ft.TextButton('OK', on_click=lambda e: close_dialog(error_dialog))],
+            )
+            open_dialog(error_dialog)
+            show_status(error_message(exc))
+            return False
     def source_duration_seconds(book):
         durations=[f.duration for f in book.files if f.duration is not None]
         if not durations:
@@ -824,10 +878,8 @@ def main(page: ft.Page):
             updates['dramatic_audio']=dramatic
             save_button.disabled=True
             page.update()
-            saving_dialog=ft.AlertDialog(modal=True, title=ft.Text('Saving target settings...'), content=ft.Column([ft.ProgressRing(), ft.Text('Writing tags. Please wait...')], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER))
-            open_dialog(saving_dialog)
-            await asyncio.sleep(0.1)
-            try:
+
+            def write_target_settings():
                 with Session() as session:
                     group=create_change_group(session, book.key, source_type, 'Set target settings')
                     for file_metadata in book.files:
@@ -839,17 +891,15 @@ def main(page: ft.Page):
                         file_metadata.__dict__.update(refreshed.__dict__)
                         log_changes(session, group, book.key, file_metadata.path, changes, source_type)
                     session.commit()
-                close_dialog(saving_dialog)
-                close_dialog(dialog)
-                show_success('Target settings saved.')
-                show_status('Target settings saved.')
-                render()
-            except Exception as exc:
-                close_dialog(saving_dialog)
-                save_button.disabled=False
-                error_text.value=f'Failed to save target settings: {exc}'
-                show_status(f'Failed to save target settings for {book.display_name}: {exc}')
-                page.update()
+
+            await run_modal_save_flow(
+                dialog,
+                'Saving target settings...',
+                write_target_settings,
+                'Target settings saved.',
+                'Could not save target settings',
+                lambda exc: f'Failed to save target settings for {book.display_name}: {exc}',
+            )
 
         dialog=ft.AlertDialog(
             modal=True,
