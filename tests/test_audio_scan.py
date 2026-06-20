@@ -72,4 +72,5 @@ def test_scan_directory_skips_and_logs_bad_audio_file(tmp_path, monkeypatch, cap
 
     assert [book.path for book in books] == [str(good)]
     assert errors == [f'{bad}: unpack requires a buffer of 4 bytes']
-    assert f'Skipping {bad} during audio scan: unpack requires a buffer of 4 bytes' in caplog.text
+    assert f'Audio scan warning: {bad}: unpack requires a buffer of 4 bytes' in caplog.text
+    assert 'Traceback (most recent call last)' not in caplog.text
