@@ -56,3 +56,26 @@ def test_target_settings_status_green_for_consistent_folder_targets():
     ], is_folder_book=True)
 
     assert target_settings_status(book) == 'green'
+
+
+def test_actual_audio_helpers_read_mutagen_info(monkeypatch):
+    from types import SimpleNamespace
+    from metadata_collector import app
+
+    def fake_file(path, easy=False):
+        assert path == '/tmp/book.mp3'
+        assert easy is False
+        return SimpleNamespace(info=SimpleNamespace(bitrate=127600, channels='2'))
+
+    monkeypatch.setattr(app, 'File', fake_file)
+
+    metadata = AudioFileMetadata('/tmp/book.mp3', target_bitrate=64, target_channels=1)
+    assert app.get_actual_bitrate(metadata) == 128
+    assert app.get_actual_channels(metadata) == 2
+
+
+def test_summarize_distinct_values_sorts_deduplicates_and_reports_unknown():
+    from metadata_collector.app import summarize_distinct_values
+
+    assert summarize_distinct_values([128, None, 64, 128]) == '64, 128'
+    assert summarize_distinct_values([None, None]) == 'Unknown'
