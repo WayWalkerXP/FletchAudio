@@ -124,6 +124,7 @@ from .audio_scan import scan_directory
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
 from .history import create_change_group, log_changes, metadata_diff, store_snapshot
 from .metadata_map import normalize_response
+from .mass_update import discover_folder_book_tracks, save_track_title_rows
 from .maintenance import compact_database, database_path, format_bytes, get_database_size_display
 from .staging import destination_for, discover_staging_candidates, move_to_staging, safe_move_to_staging, validate_staging_dir
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
@@ -1247,6 +1248,158 @@ def main(page: ft.Page):
         load_file(history_files[0].path)
         open_dialog(dialog)
 
+    def show_mass_update(book):
+        nonlocal current_screen
+        mass_update_screen_id=uuid.uuid4().hex[:8]
+        current_screen='mass_update'
+        page.route='/mass-update'
+        folder_path=Path(book.path).expanduser()
+        logging.info('Mass Update screen opened id=%s folder=%s', mass_update_screen_id, folder_path)
+        rows=discover_folder_book_tracks(folder_path)
+        logging.info('Mass Update id=%s discovered %s audio files', mass_update_screen_id, len(rows))
+        for row in rows:
+            if not row.readable:
+                logging.warning('Mass Update unreadable file id=%s file=%s error=%s', mass_update_screen_id, row.path, row.error)
+        sort_field=ft.Dropdown(label='Sort by', value='filename', width=180, options=[ft.dropdown.Option('filename', 'Filename'), ft.dropdown.Option('track', 'Track'), ft.dropdown.Option('title', 'Title')])
+        sort_direction=ft.Dropdown(label='Direction', value='ascending', width=170, options=[ft.dropdown.Option('ascending', 'Ascending'), ft.dropdown.Option('descending', 'Descending')])
+        table=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=0)
+        unsaved={'value': False}
+        title_text=ft.Text('Mass Update', size=24, weight=ft.FontWeight.BOLD)
+        unsaved_text=ft.Text('', color=ft.Colors.AMBER)
+        divider_color=ft.Colors.OUTLINE_VARIANT
+        row_border=ft.Border(bottom=ft.BorderSide(1, divider_color))
+        column_border=ft.Border(left=ft.BorderSide(1, divider_color))
+
+        def cell(content, width, border=None, padding=8):
+            if isinstance(content, str):
+                content=ft.Text(content, selectable=True, width=width - (padding * 2), no_wrap=False)
+            return ft.Container(content=content, width=width, padding=padding, border=border)
+
+        def mark_unsaved(reason, row=None):
+            unsaved['value']=True
+            unsaved_text.value='Unsaved changes'
+            if row:
+                logging.info('Mass Update edit change id=%s file=%s reason=%s', mass_update_screen_id, row.path, reason)
+            else:
+                logging.info('Mass Update edit change id=%s reason=%s', mass_update_screen_id, reason)
+            page.update()
+
+        def row_value(row, field):
+            return getattr(row, field) or ''
+
+        def render_rows():
+            table.controls.clear()
+            table.controls.append(ft.Row([
+                cell(ft.Text('Select', weight=ft.FontWeight.BOLD), 90),
+                cell(ft.Text('Filename', weight=ft.FontWeight.BOLD), 320, column_border),
+                cell(ft.Text('Track', weight=ft.FontWeight.BOLD), 130, column_border),
+                cell(ft.Text('Title', weight=ft.FontWeight.BOLD), 360, column_border),
+                cell(ft.Text('Status', weight=ft.FontWeight.BOLD), 160, column_border),
+            ], spacing=0))
+            reverse=sort_direction.value == 'descending'
+            sorted_rows=sorted(rows, key=lambda row: row_value(row, sort_field.value).casefold(), reverse=reverse)
+            for row in sorted_rows:
+                checkbox=ft.Checkbox(value=row.selected)
+                track_field=ft.TextField(value=row.track, width=112, dense=True)
+                title_field=ft.TextField(value=row.title, width=342, dense=True)
+                def on_selected(e, row=row):
+                    row.selected=bool(e.control.value)
+                    mark_unsaved('checkbox', row)
+                def on_track(e, row=row):
+                    row.track=e.control.value or ''
+                    mark_unsaved('track', row)
+                def on_title(e, row=row):
+                    row.title=e.control.value or ''
+                    mark_unsaved('title', row)
+                checkbox.on_change=on_selected
+                track_field.on_change=on_track
+                title_field.on_change=on_title
+                status_label='OK' if row.readable else f'Unreadable: {row.error}'
+                table.controls.append(ft.Container(content=ft.Row([
+                    cell(checkbox, 90),
+                    cell(row.filename, 320, column_border),
+                    cell(track_field, 130, column_border),
+                    cell(title_field, 360, column_border),
+                    cell(status_label, 160, column_border),
+                ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START), border=row_border))
+            page.update()
+
+        def sort_changed(e):
+            logging.info('Mass Update sort change id=%s sort=%s direction=%s', mass_update_screen_id, sort_field.value, sort_direction.value)
+            render_rows()
+
+        sort_field.on_change=sort_changed
+        sort_direction.on_change=sort_changed
+
+        def future_placeholder(action):
+            logging.info('Mass Update future action clicked id=%s action=%s', mass_update_screen_id, action)
+            dialog=ft.AlertDialog(modal=True, title=ft.Text(action), content=ft.Text('This action will be implemented in a later FA-0003 phase.'), actions=[ft.TextButton('OK', on_click=lambda e: close_dialog(dialog))])
+            open_dialog(dialog)
+
+        def return_to_main():
+            current_screen='main'
+            render()
+
+        def cancel_clicked(e):
+            logging.info('Mass Update Cancel clicked id=%s unsaved=%s', mass_update_screen_id, unsaved['value'])
+            if not unsaved['value']:
+                return_to_main()
+                return
+            def discard(_):
+                logging.info('Mass Update unsaved discard confirmed id=%s', mass_update_screen_id)
+                close_dialog(confirm_dialog)
+                return_to_main()
+            confirm_dialog=ft.AlertDialog(modal=True, title=ft.Text('Discard unsaved changes?'), content=ft.Text('You have unsaved changes. Return to the main screen without saving?'), actions=[ft.TextButton('Stay', on_click=lambda e: close_dialog(confirm_dialog)), ft.FilledButton('Discard', on_click=discard)])
+            open_dialog(confirm_dialog)
+
+        async def save_clicked(e, exit_after=False):
+            logging.info('Mass Update %s clicked id=%s', 'Save & Exit' if exit_after else 'Save', mass_update_screen_id)
+            progress=open_progress_dialog('Saving Mass Update changes...')
+            await asyncio.sleep(0.1)
+            successes, failures=save_track_title_rows(rows)
+            close_dialog(progress)
+            logging.info('Mass Update save counts id=%s successes=%s failures=%s', mass_update_screen_id, successes, len(failures))
+            summary=f'Saved {successes} file(s).'
+            if failures:
+                summary += '\nFailed: ' + ', '.join(f'{row.filename}: {error}' for row, error in failures[:5])
+            dialog=ft.AlertDialog(modal=True, title=ft.Text('Mass Update save complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda ev: close_dialog(dialog))])
+            open_dialog(dialog)
+            if not failures:
+                unsaved['value']=False
+                unsaved_text.value=''
+                refreshed=discover_folder_book_tracks(folder_path)
+                rows[:] = refreshed
+                render_rows()
+                if exit_after:
+                    close_dialog(dialog)
+                    return_to_main()
+            else:
+                page.update()
+
+        def save_button_handler(e):
+            page.run_task(save_clicked, e, False) if hasattr(page, 'run_task') else asyncio.create_task(save_clicked(e, False))
+        def save_exit_button_handler(e):
+            page.run_task(save_clicked, e, True) if hasattr(page, 'run_task') else asyncio.create_task(save_clicked(e, True))
+
+        replace_page_controls(
+            title_text,
+            ft.Text(f'Folder: {folder_path}', selectable=True),
+            ft.Row([sort_field, sort_direction, unsaved_text], spacing=12, wrap=True),
+            ft.Container(content=table, height=520, width=1090),
+            ft.Row([
+                ft.Button('Guess Tracks', on_click=lambda e: future_placeholder('Guess Tracks')),
+                ft.Button('Auto-Track', on_click=lambda e: future_placeholder('Auto-Track')),
+                ft.Button('Auto-Title', on_click=lambda e: future_placeholder('Auto-Title')),
+                ft.Button('Set Title', on_click=lambda e: future_placeholder('Set Title')),
+                ft.TextButton('Cancel', on_click=cancel_clicked),
+                ft.FilledButton('Save', on_click=save_button_handler),
+                ft.FilledButton('Save & Exit', on_click=save_exit_button_handler),
+            ], spacing=8, wrap=True),
+            status,
+        )
+        render_rows()
+        log_page_state(page, f'after rendering Mass Update screen id={mass_update_screen_id}')
+
     def show_warning(title, message):
         warning_dialog=ft.AlertDialog(
             modal=True,
@@ -1607,7 +1760,7 @@ def main(page: ft.Page):
                 ft.Button('Search by ASIN', on_click=create_asin_search_handler(book)),
             ]
             if book.is_folder_book:
-                actions.append(ft.Button('Mass Update'))
+                actions.append(ft.Button('Mass Update', on_click=lambda e, book=book: show_mass_update(book)))
             return ft.Row(actions, spacing=8, wrap=False, alignment=ft.MainAxisAlignment.START)
 
         def child_file_row(file_meta, index):
