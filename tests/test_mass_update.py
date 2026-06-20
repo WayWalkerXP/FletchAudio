@@ -39,3 +39,65 @@ def test_track_number_formatting_uses_dynamic_minimum_width():
 def test_track_sort_key_is_numeric_aware():
     values = ['1', '10', '003', '2', '100', 'abc']
     assert sorted(values, key=track_sort_key) == ['1', '2', '003', '10', '100', 'abc']
+
+
+def test_mass_update_row_changed_compares_current_to_original(tmp_path):
+    from metadata_collector.mass_update import MassUpdateTrackRow
+
+    row = MassUpdateTrackRow(tmp_path / 'one.mp3', 'one.mp3', '01', 'Old', '01', 'Old')
+    assert not row.changed
+    row.selected = False
+    assert not row.changed
+    row.track = '02'
+    assert row.changed
+    row.track = '01'
+    assert not row.changed
+    row.title = 'New'
+    assert row.changed
+
+
+def test_save_track_title_rows_writes_only_changed_rows_and_updates_originals(monkeypatch, tmp_path):
+    from metadata_collector import mass_update
+    from metadata_collector.mass_update import MassUpdateTrackRow
+
+    unchanged = MassUpdateTrackRow(tmp_path / 'one.mp3', 'one.mp3', '01', 'One', '01', 'One')
+    changed = MassUpdateTrackRow(tmp_path / 'two.mp3', 'two.mp3', '02', 'Two', '03', 'Two Revised')
+    unreadable = MassUpdateTrackRow(tmp_path / 'bad.mp3', 'bad.mp3', '', '', '04', 'Bad', readable=False)
+    writes = []
+
+    def fake_write(path, updates):
+        writes.append((path, updates))
+
+    monkeypatch.setattr(mass_update, 'write_audio_metadata', fake_write)
+
+    successes, unchanged_count, failures = mass_update.save_track_title_rows([unchanged, changed, unreadable])
+
+    assert successes == 1
+    assert unchanged_count == 1
+    assert failures == []
+    assert writes == [(str(changed.path), {'track': '03', 'title': 'Two Revised'})]
+    assert changed.original_track == '03'
+    assert changed.original_title == 'Two Revised'
+    assert not changed.changed
+
+
+def test_save_track_title_rows_keeps_failed_rows_dirty(monkeypatch, tmp_path):
+    from metadata_collector import mass_update
+    from metadata_collector.mass_update import MassUpdateTrackRow
+
+    row = MassUpdateTrackRow(tmp_path / 'fail.mp3', 'fail.mp3', '01', 'Old', '02', 'New')
+
+    def fake_write(path, updates):
+        raise RuntimeError('boom')
+
+    monkeypatch.setattr(mass_update, 'write_audio_metadata', fake_write)
+
+    successes, unchanged_count, failures = mass_update.save_track_title_rows([row])
+
+    assert successes == 0
+    assert unchanged_count == 0
+    assert len(failures) == 1
+    assert failures[0][0] is row
+    assert row.original_track == '01'
+    assert row.original_title == 'Old'
+    assert row.changed

@@ -1286,6 +1286,11 @@ def main(page: ft.Page):
                 logging.info('Mass Update edit change id=%s reason=%s', mass_update_screen_id, reason)
             page.update()
 
+        def refresh_metadata_dirty():
+            metadata_dirty['value']=any(row.changed for row in rows if row.readable)
+            unsaved_text.value='Unsaved changes' if metadata_dirty['value'] else ''
+            return metadata_dirty['value']
+
         def row_value(row, field):
             return getattr(row, field) or ''
 
@@ -1298,7 +1303,7 @@ def main(page: ft.Page):
             return sorted(rows, key=key, reverse=reverse)
 
         def render_rows():
-            table.controls.clear()
+            table.controls=[]
             table.controls.append(ft.Row([
                 cell(ft.Text('Select', weight=ft.FontWeight.BOLD), 90),
                 cell(ft.Text('Filename', weight=ft.FontWeight.BOLD), 320, column_border),
@@ -1316,10 +1321,18 @@ def main(page: ft.Page):
                     logging.info('Mass Update selection change id=%s file=%s selected=%s', mass_update_screen_id, row.path, row.selected)
                 def on_track(e, row=row):
                     row.track=e.control.value or ''
-                    mark_unsaved('track', row)
+                    if refresh_metadata_dirty():
+                        mark_unsaved('track', row)
+                    else:
+                        logging.info('Mass Update edit reverted id=%s file=%s reason=track', mass_update_screen_id, row.path)
+                        page.update()
                 def on_title(e, row=row):
                     row.title=e.control.value or ''
-                    mark_unsaved('title', row)
+                    if refresh_metadata_dirty():
+                        mark_unsaved('title', row)
+                    else:
+                        logging.info('Mass Update edit reverted id=%s file=%s reason=title', mass_update_screen_id, row.path)
+                        page.update()
                 checkbox.on_change=on_selected
                 track_field.on_change=on_track
                 title_field.on_change=on_title
@@ -1418,19 +1431,30 @@ def main(page: ft.Page):
                 error_text.value=''
                 logging.info('Auto-Track rows updated in dialog id=%s rows=%s width=%s', mass_update_screen_id, len(track_fields), width)
                 page.update()
-            def save_dialog_values(_):
-                logging.info('Auto-Track Save clicked id=%s', mass_update_screen_id)
+            def apply_auto_track_to_rows():
                 updated=0
                 for row, field in track_fields:
                     new_track=field.value or ''
                     if row.track != new_track:
                         row.track=new_track
                         updated += 1
+                return updated
+            def save_dialog_values(_):
+                logging.info('Auto-Track Save clicked id=%s', mass_update_screen_id)
+                updated=apply_auto_track_to_rows()
                 close_dialog(dialog)
                 if updated:
                     mark_unsaved('auto-track')
                     render_rows()
                 logging.info('Auto-Track rows updated id=%s updated=%s', mass_update_screen_id, updated)
+            def save_exit_dialog_values(e):
+                logging.info('Auto-Track Save & Exit clicked id=%s', mass_update_screen_id)
+                updated=apply_auto_track_to_rows()
+                if updated:
+                    refresh_metadata_dirty()
+                    render_rows()
+                close_dialog(dialog)
+                page.run_task(save_clicked, e, True) if hasattr(page, 'run_task') else asyncio.create_task(save_clicked(e, True))
             def cancel_dialog_values(_):
                 logging.info('Auto-Track Cancel clicked id=%s dirty=%s', mass_update_screen_id, dialog_dirty['value'])
                 if not dialog_dirty['value']:
@@ -1447,7 +1471,7 @@ def main(page: ft.Page):
                 confirm_dialog=ft.AlertDialog(modal=True, title=ft.Text('Discard Auto-Track changes?'), content=ft.Text('You have unsaved Auto-Track changes.'), actions=[ft.TextButton('Stay', on_click=stay), ft.FilledButton('Discard', on_click=discard)])
                 open_dialog(confirm_dialog)
             content=ft.Column([starting_field, error_text, ft.Container(content=ft.Column(list_rows, scroll=ft.ScrollMode.AUTO), width=520, height=360)], tight=True, spacing=10)
-            dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Track'), content=content, actions=[ft.TextButton('Cancel', on_click=cancel_dialog_values), ft.Button('Apply', on_click=apply_dialog_values), ft.FilledButton('Save', on_click=save_dialog_values)])
+            dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Track'), content=content, actions=[ft.TextButton('Cancel', on_click=cancel_dialog_values), ft.Button('Apply', on_click=apply_dialog_values), ft.Button('Save', on_click=save_dialog_values), ft.FilledButton('Save & Exit', on_click=save_exit_dialog_values)])
             open_dialog(dialog)
 
         def return_to_main():
@@ -1470,17 +1494,16 @@ def main(page: ft.Page):
             logging.info('Mass Update %s clicked id=%s', 'Save & Exit' if exit_after else 'Save', mass_update_screen_id)
             progress=open_progress_dialog('Saving Mass Update changes...')
             await asyncio.sleep(0.1)
-            successes, failures=save_track_title_rows(rows)
+            successes, unchanged, failures=save_track_title_rows(rows)
             close_dialog(progress)
-            logging.info('Mass Update save counts id=%s successes=%s failures=%s', mass_update_screen_id, successes, len(failures))
-            summary=f'Saved {successes} file(s).'
+            logging.info('Mass Update save counts id=%s successes=%s unchanged=%s failures=%s', mass_update_screen_id, successes, unchanged, len(failures))
+            summary=f'Saved: {successes}\nUnchanged: {unchanged}\nFailed: {len(failures)}'
             if failures:
                 summary += '\nFailed: ' + ', '.join(f'{row.filename}: {error}' for row, error in failures[:5])
             dialog=ft.AlertDialog(modal=True, title=ft.Text('Mass Update save complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda ev: close_dialog(dialog))])
             open_dialog(dialog)
             if not failures:
-                metadata_dirty['value']=False
-                unsaved_text.value=''
+                refresh_metadata_dirty()
                 render_rows()
                 if exit_after:
                     close_dialog(dialog)
