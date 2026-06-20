@@ -3,6 +3,7 @@ import inspect
 import logging
 
 import flet as ft
+from mutagen import File, MutagenError
 
 IMAGE_CONTAIN_FIT = getattr(getattr(ft, 'ImageFit', None) or ft.BoxFit, 'CONTAIN')
 THEME_OPTIONS = ('System', 'Light', 'Dark')
@@ -21,6 +22,51 @@ TARGET_STATUS_COLORS = {
     'red': ft.Colors.RED,
     'yellow': ft.Colors.AMBER,
 }
+
+
+def _metadata_path(file_metadata_or_path):
+    return getattr(file_metadata_or_path, 'path', file_metadata_or_path)
+
+
+def get_actual_bitrate(file_metadata_or_path) -> int | None:
+    path = _metadata_path(file_metadata_or_path)
+    if not path:
+        return None
+    try:
+        audio = File(str(path), easy=False)
+    except (MutagenError, OSError):
+        return None
+    bitrate = getattr(getattr(audio, 'info', None), 'bitrate', None) if audio else None
+    if bitrate is None:
+        return None
+    try:
+        return round(int(bitrate) / 1000)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_actual_channels(file_metadata_or_path) -> int | None:
+    path = _metadata_path(file_metadata_or_path)
+    if not path:
+        return None
+    try:
+        audio = File(str(path), easy=False)
+    except (MutagenError, OSError):
+        return None
+    channels = getattr(getattr(audio, 'info', None), 'channels', None) if audio else None
+    if channels is None:
+        return None
+    try:
+        return int(channels)
+    except (TypeError, ValueError):
+        return None
+
+
+def summarize_distinct_values(values) -> str:
+    distinct = sorted({int(value) for value in values if value is not None})
+    if not distinct:
+        return 'Unknown'
+    return ', '.join(str(value) for value in distinct)
 
 
 def normalize_target_int(value):
@@ -817,12 +863,14 @@ def main(page: ft.Page):
 
         def format_current(values):
             if not values:
-                return 'Not set'
+                return 'Unset'
             return ', '.join('True' if value is True else 'False' if value is False else str(value) for value in values)
 
         bitrate_values=distinct_values('target_bitrate')
         channel_values=distinct_values('target_channels')
         dramatic_values=distinct_values('dramatic_audio')
+        actual_bitrate_current=summarize_distinct_values(get_actual_bitrate(file_meta) for file_meta in book.files)
+        actual_channels_current=summarize_distinct_values(get_actual_channels(file_meta) for file_meta in book.files)
         bitrate_prefill=bitrate_values[0] if len(bitrate_values) == 1 and str(bitrate_values[0]) in valid_bitrates else None
         channel_prefill=channel_values[0] if len(channel_values) == 1 and str(channel_values[0]) in valid_channels else '1'
         dramatic_prefill=dramatic_values[0] if len(dramatic_values) == 1 else False
@@ -843,8 +891,8 @@ def main(page: ft.Page):
             cell(ft.Text('Current Value', weight=ft.FontWeight.BOLD), 250, column_border),
         ], spacing=0)]
         for label, control, current in [
-            ('Bitrate', bitrate_dropdown, format_current(bitrate_values)),
-            ('Channels', channels_dropdown, format_current(channel_values)),
+            ('Bitrate', bitrate_dropdown, actual_bitrate_current),
+            ('Channels', channels_dropdown, actual_channels_current),
             ('Dramatic Audio', dramatic_checkbox, format_current(dramatic_values)),
         ]:
             rows.append(ft.Container(content=ft.Row([
