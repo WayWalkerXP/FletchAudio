@@ -25,6 +25,8 @@ import logging
 
 from .audio_scan import is_audio_file
 from .audio_tags import read_audio_metadata, write_audio_metadata
+from mutagen import File
+from mutagen.mp4 import MP4
 
 LOGGER = logging.getLogger(__name__)
 IGNORED_FOLDER_BOOK_FILES = {'metadata.yaml', 'metadata.yml', '__skipped__.txt'}
@@ -43,6 +45,27 @@ class MassUpdateTrackRow:
 
 def _string_value(value) -> str:
     return '' if value is None else str(value)
+
+
+def read_track_text(path: Path) -> str:
+    """Return the user-facing track tag exactly when the container stores text.
+
+    ID3/Vorbis-style tags can store values such as ``01`` as text.  The main
+    metadata reader normalizes tracks for other screens, but Mass Update edits
+    track values as text and must preserve leading zeroes.  MP4 track tags are
+    numeric tuples, so there is no padding to recover from the file itself.
+    """
+    audio = File(str(path), easy=False)
+    if not audio or not audio.tags:
+        return ''
+    if isinstance(audio, MP4):
+        track = (audio.tags.get('trkn') or [(None, None)])[0][0]
+        return _string_value(track)
+    for key in ('TRCK', 'TRACKNUMBER', 'tracknumber'):
+        value = audio.tags.get(key)
+        if value is not None:
+            return _string_value(value).split('/', 1)[0]
+    return ''
 
 _TRACK_SEPARATORS = {' ', '-', '_', '.'}
 
@@ -101,7 +124,10 @@ def discover_folder_book_tracks(folder_path) -> list[MassUpdateTrackRow]:
             continue
         try:
             metadata = read_audio_metadata(str(child))
-            rows.append(MassUpdateTrackRow(child, child.name, _string_value(metadata.track), _string_value(metadata.title)))
+            track = read_track_text(child)
+            if track == '':
+                track = _string_value(metadata.track)
+            rows.append(MassUpdateTrackRow(child, child.name, track, _string_value(metadata.title)))
         except Exception as exc:
             LOGGER.warning('Mass Update unreadable audio file %s: %s', child, exc, exc_info=True)
             rows.append(MassUpdateTrackRow(child, child.name, '', '', readable=False, error=str(exc)))

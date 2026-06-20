@@ -1264,7 +1264,8 @@ def main(page: ft.Page):
         sort_direction=ft.Dropdown(label='Direction', value='ascending', width=170, options=[ft.dropdown.Option('ascending', 'Ascending'), ft.dropdown.Option('descending', 'Descending')])
         table=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=0)
         action_footer_height=72
-        unsaved={'value': False}
+        metadata_dirty={'value': False}
+        selection_dirty={'value': False}
         title_text=ft.Text('Mass Update', size=24, weight=ft.FontWeight.BOLD)
         unsaved_text=ft.Text('', color=ft.Colors.AMBER)
         divider_color=ft.Colors.OUTLINE_VARIANT
@@ -1277,7 +1278,7 @@ def main(page: ft.Page):
             return ft.Container(content=content, width=width, padding=padding, border=border)
 
         def mark_unsaved(reason, row=None):
-            unsaved['value']=True
+            metadata_dirty['value']=True
             unsaved_text.value='Unsaved changes'
             if row:
                 logging.info('Mass Update edit change id=%s file=%s reason=%s', mass_update_screen_id, row.path, reason)
@@ -1311,7 +1312,8 @@ def main(page: ft.Page):
                 title_field=ft.TextField(value=row.title, width=342, dense=True)
                 def on_selected(e, row=row):
                     row.selected=bool(e.control.value)
-                    mark_unsaved('checkbox', row)
+                    selection_dirty['value']=True
+                    logging.info('Mass Update selection change id=%s file=%s selected=%s', mass_update_screen_id, row.path, row.selected)
                 def on_track(e, row=row):
                     row.track=e.control.value or ''
                     mark_unsaved('track', row)
@@ -1429,16 +1431,20 @@ def main(page: ft.Page):
                     mark_unsaved('auto-track')
                     render_rows()
                 logging.info('Auto-Track rows updated id=%s updated=%s', mass_update_screen_id, updated)
-            def close_after_discard(_):
-                logging.info('Auto-Track discard confirmed id=%s', mass_update_screen_id)
-                close_dialog(confirm_dialog)
-                close_dialog(dialog)
             def cancel_dialog_values(_):
                 logging.info('Auto-Track Cancel clicked id=%s dirty=%s', mass_update_screen_id, dialog_dirty['value'])
                 if not dialog_dirty['value']:
                     close_dialog(dialog)
                     return
-                confirm_dialog=ft.AlertDialog(modal=True, title=ft.Text('Discard Auto-Track changes?'), content=ft.Text('You have unsaved Auto-Track changes.'), actions=[ft.TextButton('Stay', on_click=lambda ev: close_dialog(confirm_dialog)), ft.FilledButton('Discard', on_click=close_after_discard)])
+                confirm_dialog=None
+                def stay(_):
+                    close_dialog(confirm_dialog)
+                def discard(_):
+                    logging.info('Auto-Track discard confirmed id=%s', mass_update_screen_id)
+                    close_dialog(confirm_dialog)
+                    close_dialog(dialog)
+                    page.update()
+                confirm_dialog=ft.AlertDialog(modal=True, title=ft.Text('Discard Auto-Track changes?'), content=ft.Text('You have unsaved Auto-Track changes.'), actions=[ft.TextButton('Stay', on_click=stay), ft.FilledButton('Discard', on_click=discard)])
                 open_dialog(confirm_dialog)
             content=ft.Column([starting_field, error_text, ft.Container(content=ft.Column(list_rows, scroll=ft.ScrollMode.AUTO), width=520, height=360)], tight=True, spacing=10)
             dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Track'), content=content, actions=[ft.TextButton('Cancel', on_click=cancel_dialog_values), ft.Button('Apply', on_click=apply_dialog_values), ft.FilledButton('Save', on_click=save_dialog_values)])
@@ -1449,8 +1455,8 @@ def main(page: ft.Page):
             render()
 
         def cancel_clicked(e):
-            logging.info('Mass Update Cancel clicked id=%s unsaved=%s', mass_update_screen_id, unsaved['value'])
-            if not unsaved['value']:
+            logging.info('Mass Update Cancel clicked id=%s metadata_dirty=%s selection_dirty=%s', mass_update_screen_id, metadata_dirty['value'], selection_dirty['value'])
+            if not metadata_dirty['value']:
                 return_to_main()
                 return
             def discard(_):
@@ -1473,10 +1479,8 @@ def main(page: ft.Page):
             dialog=ft.AlertDialog(modal=True, title=ft.Text('Mass Update save complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda ev: close_dialog(dialog))])
             open_dialog(dialog)
             if not failures:
-                unsaved['value']=False
+                metadata_dirty['value']=False
                 unsaved_text.value=''
-                refreshed=discover_folder_book_tracks(folder_path)
-                rows[:] = refreshed
                 render_rows()
                 if exit_after:
                     close_dialog(dialog)
