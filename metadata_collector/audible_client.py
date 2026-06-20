@@ -109,6 +109,28 @@ def runtime_difference_minutes(source_duration_seconds, audible_runtime_minutes)
         return None
     return abs(audible_minutes - source_minutes)
 
+
+
+def get_runtime_match_category(source_minutes: float | None, result_minutes: float | None) -> str | None:
+    """Return runtime match category for total-minute runtimes.
+
+    Returns "green" for differences up to 5 minutes, "amber" for
+    differences greater than 5 and less than 15 minutes, "red" for
+    differences of 15 minutes or more, and None when either runtime is
+    unavailable or cannot be parsed.
+    """
+    if source_minutes is None or result_minutes is None:
+        return None
+    try:
+        difference=abs(float(source_minutes) - float(result_minutes))
+    except (TypeError, ValueError):
+        return None
+    if difference <= 5:
+        return 'green'
+    if difference < 15:
+        return 'amber'
+    return 'red'
+
 def sort_results_by_runtime_match(results: list[AudibleSearchResult], source_duration_seconds):
     if source_duration_seconds is None:
         return list(results)

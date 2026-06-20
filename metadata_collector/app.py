@@ -25,6 +25,12 @@ TARGET_STATUS_COLORS = {
     'yellow': ft.Colors.AMBER,
 }
 
+RUNTIME_RESULT_ROW_COLORS = {
+    'green': ft.Colors.with_opacity(0.18, ft.Colors.GREEN),
+    'amber': ft.Colors.with_opacity(0.18, ft.Colors.AMBER),
+    'red': ft.Colors.with_opacity(0.18, ft.Colors.RED),
+}
+
 
 def _metadata_path(file_metadata_or_path):
     return getattr(file_metadata_or_path, 'path', file_metadata_or_path)
@@ -109,7 +115,7 @@ def padding_only(*, left=0, right=0, top=0, bottom=0):
 def margin_only(*, left=0, right=0, top=0, bottom=0):
     return ft.Margin(left=left, right=right, top=top, bottom=bottom)
 
-from .audible_client import AudibleClient, build_title_author_query, normalize_asin, parse_search_results, product_from_asin_response, runtime_difference_minutes, sort_results_by_runtime_match, validate_asin
+from .audible_client import AudibleClient, build_title_author_query, get_runtime_match_category, normalize_asin, parse_search_results, product_from_asin_response, runtime_difference_minutes, sort_results_by_runtime_match, validate_asin
 from .config import load_settings, save_settings
 from .db import init_db, get_session_factory
 from .audio_scan import scan_directory
@@ -354,8 +360,20 @@ def main(page: ft.Page):
         return format_minutes(round(seconds / 60)) if seconds is not None else 'Unknown'
     def result_row(result, source_seconds, on_select):
         diff=runtime_difference_minutes(source_seconds, result.runtime_length_min)
+        source_minutes=round(source_seconds / 60) if source_seconds is not None else None
+        runtime_category=get_runtime_match_category(source_minutes, result.runtime_length_min)
+        if runtime_category is None:
+            logging.debug('Runtime comparison skipped for Audible result because runtime was unavailable.')
+        else:
+            logging.debug(
+                'Audible result runtime comparison: Source=%s Result=%s Difference=%s Color=%s',
+                source_minutes,
+                result.runtime_length_min,
+                diff,
+                runtime_category,
+            )
         series=' '.join(p for p in [result.series_title, result.series_sequence] if p)
-        return ft.Row([
+        row=ft.Row([
             ft.Text(result.title or '', width=180),
             ft.Text(result.subtitle or '', width=120),
             ft.Text(result.author_text, width=140),
@@ -367,6 +385,12 @@ def main(page: ft.Page):
             ft.Text(result.asin or '', width=90),
             ft.Button('Select', on_click=on_select),
         ], wrap=True)
+        return ft.Container(
+            content=row,
+            bgcolor=RUNTIME_RESULT_ROW_COLORS.get(runtime_category),
+            padding=padding_symmetric(horizontal=4, vertical=2),
+            tooltip=f'Runtime difference: {diff} minutes' if diff is not None else None,
+        )
     def show_comparison(book, metadata, source_type='audible_title_author'):
         first=book.files[0]
         current_cover_file=next((file for file in book.files if file.cover_data_uri), first)
