@@ -191,20 +191,16 @@ def main(page: ft.Page):
         if hasattr(page, 'dialog'):
             page.dialog = None
         if overlay is not None:
-            for control in list(overlay):
-                if hasattr(control, 'open'):
-                    control.open = False
-            overlay.clear()
-        views = getattr(page, 'views', None)
-        if views is not None:
-            views.clear()
+            for control in dialogs_to_close:
+                if control in overlay:
+                    overlay.remove(control)
 
     def return_to_main_menu_after_staging(dialog=None):
         clear_dialog_state(dialog)
-        go = getattr(page, 'go', None)
-        if go:
-            go('/')
-        scan()
+        if settings.get('working_directory'):
+            scan()
+        else:
+            render()
         page.update()
 
     def open_progress_dialog(message):

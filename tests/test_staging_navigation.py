@@ -14,8 +14,10 @@ def test_staging_completion_ok_clears_dialogs_and_returns_to_main_menu():
     summary_dialog_source = app_source.split("title=ft.Text('Move to Staging Complete')", 1)[1].split('open_dialog(summary_dialog)', 1)[0]
 
     assert 'clear_dialog_state(dialog)' in helper_source
-    assert "go('/')" in helper_source
+    assert "go('/')" not in helper_source
+    assert "settings.get('working_directory')" in helper_source
     assert 'scan()' in helper_source
+    assert 'render()' in helper_source
     assert 'page.update()' in helper_source
     assert 'return_to_main_menu_after_staging(summary_dialog)' in summary_dialog_source
     assert '(close_dialog(summary_dialog), scan())' not in summary_dialog_source
@@ -27,8 +29,9 @@ def test_staging_clear_dialog_state_removes_active_overlays():
 
     assert 'dialog.open = False' in helper_source
     assert 'page.dialog = None' in helper_source
-    assert 'overlay.clear()' in helper_source
-    assert 'views.clear()' in helper_source
+    assert 'overlay.remove(control)' in helper_source
+    assert 'overlay.clear()' not in helper_source
+    assert 'views.clear()' not in helper_source
 
 
 def test_staging_completion_ok_does_not_reopen_staging_screen():
