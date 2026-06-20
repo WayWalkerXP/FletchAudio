@@ -1273,6 +1273,36 @@ def main(page: ft.Page):
         row_border=ft.Border(bottom=ft.BorderSide(1, divider_color))
         column_border=ft.Border(left=ft.BorderSide(1, divider_color))
         row_controls={}
+        auto_track_open={'value': False}
+        auto_track_dialog_state={'dirty': False}
+
+        def is_auto_track_control(control):
+            if getattr(control, 'data', None) == 'auto-track-root':
+                return True
+            children=[]
+            for attr in ('controls', 'actions'):
+                value=getattr(control, attr, None)
+                if value:
+                    children.extend(value)
+            for attr in ('content', 'title'):
+                value=getattr(control, attr, None)
+                if value:
+                    children.append(value)
+            return any(is_auto_track_control(child) for child in children)
+
+        def auto_track_controls_present():
+            containers=[]
+            containers.extend(getattr(page, 'controls', []) or [])
+            containers.extend(getattr(page, 'views', []) or [])
+            containers.extend(getattr(page, 'overlay', []) or [])
+            active_dialog=getattr(page, 'dialog', None)
+            if active_dialog:
+                containers.append(active_dialog)
+            return any(is_auto_track_control(control) for control in containers)
+
+        def log_auto_track_final_state():
+            logging.info('Auto-Track final state id=%s auto_track_open=%s dirty=%s', mass_update_screen_id, auto_track_open['value'], auto_track_dialog_state['dirty'])
+            logging.info('Auto-Track controls present after render=%s id=%s', auto_track_controls_present(), mass_update_screen_id)
 
         def cell(content, width, border=None, padding=8):
             if isinstance(content, str):
@@ -1319,6 +1349,10 @@ def main(page: ft.Page):
             else:
                 key=lambda row: row_value(row, sort_field.value).casefold()
             return sorted(rows, key=key, reverse=reverse)
+
+        def render_mass_update_screen():
+            replace_page_controls(mass_update_content)
+            render_rows()
 
         def render_rows():
             logging.info('Grid rebuild started id=%s', mass_update_screen_id)
@@ -1419,6 +1453,7 @@ def main(page: ft.Page):
             open_dialog(dialog)
 
         def auto_track_clicked(e):
+            auto_track_open['value']=True
             selected_rows=selected_rows_in_visible_order()
             logging.info('Auto-Track opened id=%s selected_rows=%s', mass_update_screen_id, len(selected_rows))
             starting_field=ft.TextField(label='Starting Track Number', value='1', width=220, dense=True)
@@ -1427,6 +1462,7 @@ def main(page: ft.Page):
             track_fields=[]
             def dialog_changed(_):
                 dialog_dirty['value']=True
+                auto_track_dialog_state['dirty']=True
             for row in selected_rows:
                 field=ft.TextField(value=row.track, width=112, dense=True, on_change=dialog_changed)
                 track_fields.append((row, field))
@@ -1454,10 +1490,12 @@ def main(page: ft.Page):
                 for index, (_, field) in enumerate(track_fields):
                     field.value=format_track_number(starting + index, width)
                 dialog_dirty['value']=True
+                auto_track_dialog_state['dirty']=True
                 error_text.value=''
                 logging.info('Auto-Track rows updated in dialog id=%s rows=%s width=%s', mass_update_screen_id, len(track_fields), width)
                 page.update()
-            auto_track_dialog_open={'value': True}
+            auto_track_dialog_open=auto_track_open
+            auto_track_dialog_state['dirty']=False
             def auto_track_dialog_is_open():
                 return bool(auto_track_dialog_open['value'] and getattr(dialog, 'open', False))
             def apply_auto_track_to_rows():
@@ -1490,10 +1528,12 @@ def main(page: ft.Page):
                 logging.info('Saved rows count id=%s value=%s', mass_update_screen_id, successes)
                 logging.info('Failed rows count id=%s value=%s', mass_update_screen_id, len(failures))
                 dialog_dirty['value']=False
+                auto_track_dialog_state['dirty']=False
                 logging.info('Auto-Track dirty state cleared id=%s', mass_update_screen_id)
                 close_auto_track_lifecycle_dialogs()
                 refresh_metadata_dirty()
-                render_rows()
+                render_mass_update_screen()
+                log_auto_track_final_state()
                 logging.info('Returning to Mass Update screen id=%s', mass_update_screen_id)
                 logging.info('Auto-Track lifecycle complete id=%s', mass_update_screen_id)
                 summary=f'Saved: {successes}\nUnchanged: {unchanged}\nFailed: {len(failures)}'
@@ -1510,7 +1550,10 @@ def main(page: ft.Page):
                     return
                 if not dialog_dirty['value']:
                     auto_track_dialog_open['value']=False
+                    auto_track_dialog_state['dirty']=False
                     close_dialog(dialog)
+                    render_mass_update_screen()
+                    log_auto_track_final_state()
                     return
                 confirm_dialog=None
                 def stay(_):
@@ -1519,11 +1562,14 @@ def main(page: ft.Page):
                     logging.info('Auto-Track discard confirmed id=%s', mass_update_screen_id)
                     close_dialog(confirm_dialog)
                     auto_track_dialog_open['value']=False
+                    auto_track_dialog_state['dirty']=False
                     close_dialog(dialog)
-                    page.update()
+                    render_mass_update_screen()
+                    log_auto_track_final_state()
                 confirm_dialog=ft.AlertDialog(modal=True, title=ft.Text('Discard Auto-Track changes?'), content=ft.Text('You have unsaved Auto-Track changes.'), actions=[ft.TextButton('Stay', on_click=stay), ft.FilledButton('Discard', on_click=discard)])
                 open_dialog(confirm_dialog)
             content=ft.Column([starting_field, error_text, ft.Container(content=ft.Column(list_rows, scroll=ft.ScrollMode.AUTO), width=520, height=360)], tight=True, spacing=10)
+            content.data='auto-track-root'
             def save_exit_handler(e):
                 page.run_task(save_exit_dialog_values, e) if hasattr(page, 'run_task') else asyncio.create_task(save_exit_dialog_values(e))
             dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Track'), content=content, actions=[ft.TextButton('Cancel', on_click=cancel_dialog_values), ft.Button('Apply', on_click=apply_dialog_values), ft.FilledButton('Save and Exit', on_click=save_exit_handler)])
@@ -1596,8 +1642,7 @@ def main(page: ft.Page):
             ),
         ], expand=True, spacing=8)
 
-        replace_page_controls(mass_update_content)
-        render_rows()
+        render_mass_update_screen()
         log_page_state(page, f'after rendering Mass Update screen id={mass_update_screen_id}')
 
     def show_warning(title, message):
