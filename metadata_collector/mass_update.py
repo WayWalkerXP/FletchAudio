@@ -36,11 +36,17 @@ IGNORED_FOLDER_BOOK_FILES = {'metadata.yaml', 'metadata.yml', '__skipped__.txt'}
 class MassUpdateTrackRow:
     path: Path
     filename: str
+    original_track: str
+    original_title: str
     track: str
     title: str
     selected: bool = True
     readable: bool = True
     error: str = ''
+
+    @property
+    def changed(self) -> bool:
+        return self.track != self.original_track or self.title != self.original_title
 
 
 def _string_value(value) -> str:
@@ -127,21 +133,29 @@ def discover_folder_book_tracks(folder_path) -> list[MassUpdateTrackRow]:
             track = read_track_text(child)
             if track == '':
                 track = _string_value(metadata.track)
-            rows.append(MassUpdateTrackRow(child, child.name, track, _string_value(metadata.title)))
+            rows.append(MassUpdateTrackRow(child, child.name, track, _string_value(metadata.title), track, _string_value(metadata.title)))
         except Exception as exc:
             LOGGER.warning('Mass Update unreadable audio file %s: %s', child, exc, exc_info=True)
-            rows.append(MassUpdateTrackRow(child, child.name, '', '', readable=False, error=str(exc)))
+            rows.append(MassUpdateTrackRow(child, child.name, '', '', '', '', readable=False, error=str(exc)))
     return rows
 
 
-def save_track_title_rows(rows: list[MassUpdateTrackRow]) -> tuple[int, list[tuple[MassUpdateTrackRow, str]]]:
+def changed_track_title_rows(rows: list[MassUpdateTrackRow]) -> list[MassUpdateTrackRow]:
+    return [row for row in rows if row.readable and row.changed]
+
+
+def save_track_title_rows(rows: list[MassUpdateTrackRow]) -> tuple[int, int, list[tuple[MassUpdateTrackRow, str]]]:
     successes = 0
     failures: list[tuple[MassUpdateTrackRow, str]] = []
-    for row in rows:
+    changed_rows = changed_track_title_rows(rows)
+    for row in changed_rows:
         try:
             write_audio_metadata(str(row.path), {'track': row.track, 'title': row.title})
+            row.original_track = row.track
+            row.original_title = row.title
             successes += 1
         except Exception as exc:
             LOGGER.warning('Mass Update failed to save %s: %s', row.path, exc, exc_info=True)
             failures.append((row, str(exc)))
-    return successes, failures
+    unchanged = len([row for row in rows if row.readable]) - successes - len(failures)
+    return successes, unchanged, failures
