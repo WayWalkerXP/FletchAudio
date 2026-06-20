@@ -198,27 +198,64 @@ def main(page: ft.Page):
         snack_bar.open = True
         page.update()
 
-    def open_dialog(dialog):
+    dialog_lifecycle_apis = {}
+
+    def open_dialog(dialog, log_label=None):
+        if log_label is None:
+            title = getattr(getattr(dialog, 'title', None), 'value', None)
+            if title == 'Auto-Track save complete':
+                log_label = title
+        open_control = getattr(page, 'open', None)
         show_dialog = getattr(page, 'show_dialog', None)
+        if open_control:
+            api = 'page.open'
+            if log_label:
+                logging.info('Opening %s dialog using API=%s dialog_id=%s', log_label, api, id(dialog))
+            dialog_lifecycle_apis[id(dialog)] = api
+            open_control(dialog)
+            return
         if show_dialog:
+            api = 'page.show_dialog'
+            if log_label:
+                logging.info('Opening %s dialog using API=%s dialog_id=%s', log_label, api, id(dialog))
+            dialog_lifecycle_apis[id(dialog)] = api
             show_dialog(dialog)
             return
+        api = 'page.dialog'
+        if log_label:
+            logging.info('Opening %s dialog using API=%s dialog_id=%s', log_label, api, id(dialog))
+        dialog_lifecycle_apis[id(dialog)] = api
         page.dialog = dialog
         dialog.open = True
         page.update()
-    def close_dialog(dialog=None):
+
+    def close_dialog(dialog=None, log_label=None):
+        api = dialog_lifecycle_apis.get(id(dialog)) if dialog else None
         close_control = getattr(page, 'close', None)
-        if close_control and dialog:
+        if log_label:
+            logging.info(
+                'Closing %s dialog using API=%s dialog_id=%s',
+                log_label,
+                'page.close' if api == 'page.open' and close_control else api or 'unknown',
+                id(dialog) if dialog else None,
+            )
+        if dialog and api == 'page.open' and close_control:
+            close_control(dialog)
+        elif dialog and api == 'page.show_dialog' and close_control:
             close_control(dialog)
         elif getattr(page, 'pop_dialog', None):
             page.pop_dialog()
         if dialog:
-            dialog.open = False
-            if getattr(page, 'dialog', None) is dialog:
-                page.dialog = None
-            overlay = getattr(page, 'overlay', None)
-            if overlay and dialog in overlay:
-                overlay.remove(dialog)
+            if api != 'page.open':
+                dialog.open = False
+                if getattr(page, 'dialog', None) is dialog:
+                    page.dialog = None
+                overlay = getattr(page, 'overlay', None)
+                if overlay and dialog in overlay:
+                    overlay.remove(dialog)
+            dialog_lifecycle_apis.pop(id(dialog), None)
+            if log_label:
+                logging.info('After close: dialog open=%s dialog_id=%s', getattr(dialog, 'open', None), id(dialog))
         page.update()
 
     def clear_dialog_state(dialog=None):
@@ -1360,14 +1397,17 @@ def main(page: ft.Page):
             if auto_track_result_returned['value']:
                 return
             auto_track_result_returned['value']=True
-            logging.info('Auto-Track save complete OK clicked id=%s', mass_update_screen_id)
+            logging.info('Auto-Track save complete OK clicked id=%s dialog_id=%s', mass_update_screen_id, id(result_dialog) if result_dialog is not None else None)
             if result_dialog is not None:
-                close_dialog(result_dialog)
+                close_dialog(result_dialog, log_label='Auto-Track save complete')
             auto_track_open['value']=False
             auto_track_dialog_state['dirty']=False
+            logging.info('After close: auto_track_open=%s id=%s', auto_track_open['value'], mass_update_screen_id)
             clear_dialog_state()
             refresh_metadata_dirty()
+            logging.info('Rendering Mass Update after report OK id=%s', mass_update_screen_id)
             render_mass_update_screen()
+            page.update()
             log_auto_track_final_state()
 
         def render_rows():
