@@ -43,8 +43,17 @@ def test_staging_completion_ok_does_not_reopen_staging_screen():
     assert "go('/move-to-staging')" not in helper_source
 
 
-def test_staging_fresh_cancel_still_closes_staging_dialog():
+def test_staging_fresh_cancel_returns_to_main_menu():
     app_source = _app_source()
     staging_source = app_source.split('def show_move_to_staging(_=None):', 1)[1].split('async def run_staging_move', 1)[0]
 
-    assert "ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog))" in staging_source
+    assert "ft.TextButton('Cancel', on_click=lambda e: return_to_main_menu_after_staging(dialog))" in staging_source
+    assert "ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog))" not in staging_source
+
+
+def test_staging_candidates_are_discovered_fresh_from_working_directory():
+    app_source = _app_source()
+    staging_source = app_source.split('def show_move_to_staging(_=None):', 1)[1].split('async def run_staging_move', 1)[0]
+
+    assert 'discover_staging_candidates(Path(working_directory).expanduser())' in staging_source
+    assert 'candidates_from_books(books)' not in staging_source
