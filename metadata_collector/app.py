@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import logging
+import threading
 import uuid
 from pathlib import Path
 
@@ -116,7 +117,7 @@ def margin_only(*, left=0, right=0, top=0, bottom=0):
     return ft.Margin(left=left, right=right, top=top, bottom=bottom)
 
 from .audible_client import AudibleClient, build_title_author_query, get_runtime_match_category, normalize_asin, parse_search_results, product_from_asin_response, runtime_difference_minutes, sort_results_by_runtime_match, validate_asin
-from .duplicate_checker import AbsConnectionError, DuplicateCheckStatus, normalize_asin_for_duplicate_check, query_abs_by_asin
+from .duplicate_checker import AbsApiEndpointError, AbsConnectionError, DuplicateCheckStatus, normalize_asin_for_duplicate_check, query_abs_by_asin
 from .config import load_settings, save_settings
 from .db import init_db, get_session_factory
 from .audio_scan import scan_directory
@@ -1453,12 +1454,21 @@ def main(page: ft.Page):
         duplicate_statuses.clear()
         current_text=ft.Text('', selectable=True)
         counts_text=ft.Text('Checked: 0\nDuplicates Found: 0\nNo Duplicates: 0\nNo ASIN: 0\nErrors: 0')
-        progress_dialog=ft.AlertDialog(modal=True, title=ft.Text('Checking duplicates...'), content=ft.Column([ft.ProgressRing(), current_text, counts_text], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER))
+        cancel_requested=threading.Event()
+
+        def request_cancel(e):
+            cancel_requested.set()
+            current_text.value='Cancelling after the current request finishes...'
+            page.update()
+
+        progress_dialog=ft.AlertDialog(modal=True, title=ft.Text('Checking duplicates...'), content=ft.Column([ft.ProgressRing(), current_text, counts_text], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER), actions=[ft.TextButton('Cancel', on_click=request_cancel)])
         open_dialog(progress_dialog)
         await asyncio.sleep(0.1)
         counts={'checked':0, 'duplicates':0, 'no_duplicates':0, 'no_asin':0, 'errors':0}
         try:
             for index, book in enumerate(books, start=1):
+                if cancel_requested.is_set():
+                    break
                 source_path=Path(book.path)
                 asin=getattr(book.files[0], 'asin', None)
                 normalized=normalize_asin_for_duplicate_check(asin)
@@ -1475,7 +1485,7 @@ def main(page: ft.Page):
                 counts['checked'] += 1
                 logging.info('Checking ASIN %s for %s', normalized, source_path)
                 try:
-                    matches=query_abs_by_asin(abs_url, api_key, asin)
+                    matches=await asyncio.to_thread(query_abs_by_asin, abs_url, api_key, asin)
                     if matches:
                         counts['duplicates'] += 1
                         duplicate_statuses[book.key]=DuplicateCheckStatus(source_path, asin, 'duplicate', len(matches))
@@ -1484,25 +1494,40 @@ def main(page: ft.Page):
                         counts['no_duplicates'] += 1
                         duplicate_statuses[book.key]=DuplicateCheckStatus(source_path, asin, 'no_duplicate', 0)
                         logging.info('ABS duplicate result for ASIN %s: no duplicate', normalized)
+                except AbsApiEndpointError:
+                    raise
                 except AbsConnectionError:
                     raise
                 except Exception as exc:
                     counts['errors'] += 1
                     duplicate_statuses[book.key]=DuplicateCheckStatus(source_path, asin, 'error', 0, str(exc))
-                    logging.exception('Duplicate check API error for ASIN %s', normalized)
+                    logging.error('Duplicate check API error for ASIN %s: %s', normalized, exc)
                 render()
                 await asyncio.sleep(0)
+        except AbsApiEndpointError as exc:
+            close_dialog(progress_dialog)
+            logging.error('Global Audiobookshelf duplicate check endpoint failure: %s', exc)
+            show_warning('Duplicate check failed', 'Duplicate check failed because the Audiobookshelf search endpoint returned 404.\n\nThe ABS URL is reachable, but the API endpoint used by the app appears to be invalid.')
+            return
         except AbsConnectionError as exc:
             close_dialog(progress_dialog)
-            logging.exception('Global Audiobookshelf duplicate check failure')
+            logging.error('Global Audiobookshelf duplicate check failure: %s', exc)
             show_warning('Unable to connect to Audiobookshelf', 'Unable to connect to Audiobookshelf. Please verify the ABS URL and API key in Settings.')
             return
         close_dialog(progress_dialog)
-        summary=f'Duplicate Check Complete\n\nChecked: {counts["checked"]}\nDuplicates Found: {counts["duplicates"]}\nNo Duplicates: {counts["no_duplicates"]}\nNo ASIN: {counts["no_asin"]}\nErrors: {counts["errors"]}'
+        cancelled=cancel_requested.is_set()
+        remaining_not_checked=sum(1 for book in books if book.key not in duplicate_statuses)
+        summary_title='Duplicate Check Cancelled' if cancelled else 'Duplicate Check Complete'
+        summary=f'{summary_title}\n\nChecked: {counts["checked"]}\nDuplicates Found: {counts["duplicates"]}\nNo Duplicates: {counts["no_duplicates"]}\nNo ASIN: {counts["no_asin"]}\nErrors: {counts["errors"]}'
+        if cancelled:
+            summary=f'{summary}\nRemaining Not Checked: {remaining_not_checked}'
         logging.info('Duplicate check final summary: %s', summary.replace('\n', ' | '))
-        summary_dialog=ft.AlertDialog(modal=True, title=ft.Text('Duplicate Check Complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda e: close_dialog(summary_dialog))])
+        summary_dialog=ft.AlertDialog(modal=True, title=ft.Text(summary_title), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda e: close_dialog(summary_dialog))])
         open_dialog(summary_dialog)
-        show_status(f'Duplicate check complete: {counts["duplicates"]} duplicate(s), {counts["no_duplicates"]} no duplicate(s), {counts["errors"]} error(s).')
+        if cancelled:
+            show_status(f'Duplicate check cancelled: checked {counts["checked"]}, remaining {remaining_not_checked}.')
+        else:
+            show_status(f'Duplicate check complete: {counts["duplicates"]} duplicate(s), {counts["no_duplicates"]} no duplicate(s), {counts["errors"]} error(s).')
 
     def render():
         nonlocal current_screen

@@ -21,26 +21,33 @@ def test_extract_asin_matches_finds_nested_exact_matches_only():
     assert len(matches) == 3
 
 
-def test_query_abs_by_asin_uses_search_and_exact_asin_matching(monkeypatch):
+def test_query_abs_by_asin_uses_library_items_and_exact_asin_matching(monkeypatch):
     calls = []
 
     class Response:
         status_code = 200
+        def __init__(self, url):
+            self.url = url
         def raise_for_status(self):
             pass
         def json(self):
+            if self.url.endswith('/api/libraries'):
+                return {'libraries': [{'id': 'lib-books', 'mediaType': 'book'}, {'id': 'lib-podcasts', 'mediaType': 'podcast'}]}
             return {'results': [{'asin': 'B00TEST'}, {'asin': 'B00OTHER'}]}
 
     def fake_get(url, headers, params, timeout):
         calls.append((url, headers, params, timeout))
-        return Response()
+        return Response(url)
 
     monkeypatch.setattr('metadata_collector.duplicate_checker.requests.get', fake_get)
+    from metadata_collector.duplicate_checker import _abs_library_items_payload
+    _abs_library_items_payload.cache_clear()
     matches = query_abs_by_asin('http://abs.local/', 'secret-token', ' b00test ')
     assert len(matches) == 1
-    assert calls[0][0] == 'http://abs.local/api/search'
+    assert calls[0][0] == 'http://abs.local/api/libraries'
     assert calls[0][1]['Authorization'] == 'Bearer secret-token'
-    assert calls[0][2] == {'q': ' b00test '}
+    assert calls[1][0] == 'http://abs.local/api/libraries/lib-books/items'
+    assert calls[1][2] == {'limit': 0, 'minified': 0, 'collapseseries': 0}
 
 
 def test_query_abs_by_asin_auth_failure_is_global_connection_error(monkeypatch):
