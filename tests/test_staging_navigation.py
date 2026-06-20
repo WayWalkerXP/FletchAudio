@@ -10,8 +10,8 @@ def _app_source():
 
 def test_staging_completion_ok_clears_dialogs_and_returns_to_main_menu():
     app_source = _app_source()
-    helper_source = app_source.split('def return_to_main_menu_after_staging(dialog=None):', 1)[1].split('def open_progress_dialog', 1)[0]
-    summary_dialog_source = app_source.split("title=ft.Text('Move to Staging Complete')", 1)[1].split('open_dialog(summary_dialog)', 1)[0]
+    helper_source = app_source.split('def return_to_main_menu_after_staging(dialog=None, move_screen_id=None):', 1)[1].split('def open_progress_dialog', 1)[0]
+    summary_dialog_source = app_source.split("def handle_completion_ok(e):", 1)[1].split('open_dialog(summary_dialog)', 1)[0]
 
     assert 'clear_dialog_state(dialog)' in helper_source
     assert "go('/')" not in helper_source
@@ -19,7 +19,8 @@ def test_staging_completion_ok_clears_dialogs_and_returns_to_main_menu():
     assert 'scan()' in helper_source
     assert 'render()' in helper_source
     assert 'page.update()' in helper_source
-    assert 'return_to_main_menu_after_staging(summary_dialog)' in summary_dialog_source
+    assert 'return_to_main_menu_after_staging(summary_dialog, move_screen_id)' in summary_dialog_source
+    assert 'handle_move_to_staging_cancel' not in summary_dialog_source
     assert '(close_dialog(summary_dialog), scan())' not in summary_dialog_source
 
 
@@ -36,7 +37,7 @@ def test_staging_clear_dialog_state_removes_active_overlays():
 
 def test_staging_completion_ok_does_not_reopen_staging_screen():
     app_source = _app_source()
-    helper_source = app_source.split('def return_to_main_menu_after_staging(dialog=None):', 1)[1].split('def open_progress_dialog', 1)[0]
+    helper_source = app_source.split('def return_to_main_menu_after_staging(dialog=None, move_screen_id=None):', 1)[1].split('def open_progress_dialog', 1)[0]
 
     assert 'show_move_to_staging' not in helper_source
     assert 'run_staging_move' not in helper_source
@@ -47,7 +48,9 @@ def test_staging_fresh_cancel_returns_to_main_menu():
     app_source = _app_source()
     staging_source = app_source.split('def show_move_to_staging(_=None):', 1)[1].split('async def run_staging_move', 1)[0]
 
-    assert "ft.TextButton('Cancel', on_click=lambda e: return_to_main_menu_after_staging(dialog))" in staging_source
+    assert 'def handle_move_to_staging_cancel(e):' in staging_source
+    assert "return_to_main_menu_after_staging(dialog, move_screen_id)" in staging_source
+    assert "ft.TextButton('Cancel', on_click=handle_move_to_staging_cancel)" in staging_source
     assert "ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog))" not in staging_source
 
 
@@ -57,3 +60,24 @@ def test_staging_candidates_are_discovered_fresh_from_working_directory():
 
     assert 'discover_staging_candidates(Path(working_directory).expanduser())' in staging_source
     assert 'candidates_from_books(books)' not in staging_source
+
+
+def test_staging_completion_ok_uses_dedicated_handler_not_cancel_callback():
+    app_source = _app_source()
+    summary_dialog_source = app_source.split("title=ft.Text('Move to Staging Complete')", 1)[0].rsplit("logging.info('Move to Staging summary", 1)[1]
+
+    assert 'def handle_completion_ok(e):' in summary_dialog_source
+    assert "ft.TextButton('OK', on_click=handle_completion_ok)" in summary_dialog_source
+    assert 'handle_move_to_staging_cancel' not in summary_dialog_source
+    assert 'Move to Staging Cancel clicked' not in summary_dialog_source
+
+
+def test_staging_lifecycle_id_is_retired_after_return_to_main_menu():
+    app_source = _app_source()
+    helper_source = app_source.split('def return_to_main_menu_after_staging(dialog=None, move_screen_id=None):', 1)[1].split('def open_progress_dialog', 1)[0]
+    staging_source = app_source.split('def show_move_to_staging(_=None):', 1)[1].split('async def run_staging_move', 1)[0]
+
+    assert 'active_move_to_staging_screen_id=None' in app_source
+    assert 'active_move_to_staging_screen_id=move_screen_id' in staging_source
+    assert 'active_move_to_staging_screen_id=None' in helper_source
+    assert "logging.info('Retiring Move to Staging screen id=%s', move_screen_id)" in helper_source

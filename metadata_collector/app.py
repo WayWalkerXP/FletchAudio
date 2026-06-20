@@ -139,6 +139,7 @@ def main(page: ft.Page):
     log_page_state(page, 'app startup before main window render')
     page.title='FletchAudio'; page.theme_mode=theme_mode_for_setting(settings.get('theme'))
     status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(content='Compact Database', on_click=None)
+    active_move_to_staging_screen_id=None
     if hasattr(page, 'services'):
         page.services.append(url_launcher)
     elif hasattr(page, 'overlay'):
@@ -221,8 +222,12 @@ def main(page: ft.Page):
                 if control in overlay:
                     overlay.remove(control)
 
-    def return_to_main_menu_after_staging(dialog=None):
+    def return_to_main_menu_after_staging(dialog=None, move_screen_id=None):
+        nonlocal active_move_to_staging_screen_id
         log_page_state(page, 'before returning to main menu after staging')
+        if move_screen_id and active_move_to_staging_screen_id == move_screen_id:
+            logging.info('Retiring Move to Staging screen id=%s', move_screen_id)
+            active_move_to_staging_screen_id=None
         clear_dialog_state(dialog)
         if settings.get('working_directory'):
             scan()
@@ -1175,7 +1180,9 @@ def main(page: ft.Page):
         show_status(message)
 
     def show_move_to_staging(_=None):
+        nonlocal active_move_to_staging_screen_id
         move_screen_id=uuid.uuid4().hex[:8]
+        active_move_to_staging_screen_id=move_screen_id
         logging.info('Opening Move to Staging screen id=%s', move_screen_id)
         log_page_state(page, f'before rendering Move to Staging screen id={move_screen_id}')
         staging_value=(settings.get('staging_dir') or '').strip()
@@ -1265,12 +1272,19 @@ def main(page: ft.Page):
             )
             open_dialog(confirm_dialog)
 
+        def handle_move_to_staging_cancel(e):
+            logging.info('Move to Staging Cancel clicked id=%s', move_screen_id)
+            log_page_state(page, f'before Move to Staging Cancel handler id={move_screen_id}')
+            return_to_main_menu_after_staging(dialog, move_screen_id)
+            log_page_state(page, f'after Move to Staging Cancel handler id={move_screen_id}')
+
+        cancel_button=ft.TextButton('Cancel', on_click=handle_move_to_staging_cancel)
+        move_button=ft.FilledButton('Move', disabled=not candidates, on_click=confirm_move)
         dialog=ft.AlertDialog(
             modal=True,
             title=ft.Text('Move to Staging'),
             content=ft.Column(rows, scroll=ft.ScrollMode.AUTO, height=520, width=1030, spacing=0),
-            # Keep Cancel returning through return_to_main_menu_after_staging(dialog); previous implementation was: ft.TextButton('Cancel', on_click=lambda e: return_to_main_menu_after_staging(dialog))
-            actions=[ft.TextButton('Cancel', on_click=lambda e: (logging.info('Move to Staging Cancel clicked id=%s', move_screen_id), log_page_state(page, f'before Move to Staging Cancel handler id={move_screen_id}'), return_to_main_menu_after_staging(dialog), log_page_state(page, f'after Move to Staging Cancel handler id={move_screen_id}'))[-1]), ft.FilledButton('Move', disabled=not candidates, on_click=confirm_move)],
+            actions=[cancel_button, move_button],
         )
         open_dialog(dialog)
         log_page_state(page, f'after rendering Move to Staging screen id={move_screen_id}')
@@ -1314,7 +1328,14 @@ def main(page: ft.Page):
             summary=f'{summary}\n\nDetails:\n{details}'
         logging.info('Move to Staging summary id=%s: %s', move_screen_id, summary.replace('\n', ' | '))
         log_page_state(page, f'before showing completion dialog id={move_screen_id}')
-        summary_dialog=ft.AlertDialog(modal=True, title=ft.Text('Move to Staging Complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda e: (logging.info('Move to Staging completion OK clicked id=%s', move_screen_id), log_page_state(page, f'before completion OK return to main menu id={move_screen_id}'), return_to_main_menu_after_staging(summary_dialog), log_page_state(page, f'after completion OK return to main menu id={move_screen_id}'))[-1])])
+        def handle_completion_ok(e):
+            logging.info('Move to Staging completion OK clicked id=%s', move_screen_id)
+            log_page_state(page, f'before completion OK return to main menu id={move_screen_id}')
+            return_to_main_menu_after_staging(summary_dialog, move_screen_id)
+            log_page_state(page, f'after completion OK return to main menu id={move_screen_id}')
+
+        ok_button=ft.TextButton('OK', on_click=handle_completion_ok)
+        summary_dialog=ft.AlertDialog(modal=True, title=ft.Text('Move to Staging Complete'), content=ft.Text(summary, selectable=True), actions=[ok_button])
         open_dialog(summary_dialog)
         log_page_state(page, f'after showing completion dialog id={move_screen_id}')
         show_status(f'Move to staging complete: moved {counts["moved"]}, skipped {counts["skipped"]}, failed {counts["failed"]}.')
