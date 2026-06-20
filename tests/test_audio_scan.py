@@ -53,3 +53,23 @@ def test_only_subfolders_with_multiple_direct_audio_files_are_folder_books(tmp_p
     assert books_by_path[str(tmp_path / 'Single In Folder' / 'only.m4b')].is_folder_book is False
     assert books_by_path[str(tmp_path / 'Parent' / 'direct.mp3')].is_folder_book is False
     assert books_by_path[str(tmp_path / 'Parent' / 'Nested')].is_folder_book is True
+
+
+def test_scan_directory_skips_and_logs_bad_audio_file(tmp_path, monkeypatch, caplog):
+    good = tmp_path / 'Good.m4b'
+    bad = tmp_path / 'Collateral.m4b'
+    _touch(good)
+    _touch(bad)
+
+    def fake_read_audio_metadata(path):
+        if path == str(bad):
+            raise RuntimeError('unpack requires a buffer of 4 bytes')
+        return AudioFileMetadata(path=path)
+
+    monkeypatch.setattr('metadata_collector.audio_scan.read_audio_metadata', fake_read_audio_metadata)
+
+    books, errors = scan_directory(str(tmp_path))
+
+    assert [book.path for book in books] == [str(good)]
+    assert errors == [f'{bad}: unpack requires a buffer of 4 bytes']
+    assert f'Skipping {bad} during audio scan: unpack requires a buffer of 4 bytes' in caplog.text

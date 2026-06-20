@@ -81,3 +81,13 @@ def test_staging_lifecycle_id_is_retired_after_return_to_main_menu():
     assert 'active_move_to_staging_screen_id=move_screen_id' in staging_source
     assert 'active_move_to_staging_screen_id=None' in helper_source
     assert "logging.info('Retiring Move to Staging screen id=%s', move_screen_id)" in helper_source
+
+
+def test_return_to_main_menu_after_staging_has_controlled_error_state():
+    app_source = _app_source()
+    helper_source = app_source.split('def return_to_main_menu_after_staging(dialog=None, move_screen_id=None):', 1)[1].split('def open_progress_dialog', 1)[0]
+
+    assert 'try:' in helper_source
+    assert "logging.exception('Failed to render main menu after staging')" in helper_source
+    assert 'render_main_menu_error_state(str(exc))' in helper_source
+    assert "ft.Button('Retry Main Menu'" in app_source

@@ -1,4 +1,7 @@
+import logging
 import os
+
+LOGGER = logging.getLogger(__name__)
 
 from .audio_tags import read_audio_metadata
 from .models import Book
@@ -13,8 +16,11 @@ def _read_audio_files(folder: str, filenames: list[str], errors: list[str]):
     for name in sorted(filenames):
         path=os.path.join(folder,name)
         if not is_audio_file(path): continue
-        try: metas.append(read_audio_metadata(path))
-        except Exception as e: errors.append(f'{path}: {e}')
+        try:
+            metas.append(read_audio_metadata(path))
+        except Exception as e:
+            LOGGER.warning('Skipping %s during audio scan: %s', path, e, exc_info=True)
+            errors.append(f'{path}: {e}')
     return metas
 
 
