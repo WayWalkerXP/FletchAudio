@@ -1398,7 +1398,7 @@ def main(page: ft.Page):
                 content=action_buttons,
                 height=action_footer_height,
                 width=1090,
-                alignment=ft.alignment.center_left,
+                alignment=ft.Alignment.CENTER_LEFT,
                 padding=ft.padding.only(top=12),
                 border=ft.Border(top=ft.BorderSide(1, divider_color)),
             ),
