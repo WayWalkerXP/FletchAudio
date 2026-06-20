@@ -1,5 +1,9 @@
 import logging
 import os
+import struct
+
+import mutagen
+from mutagen.mp4 import MP4MetadataError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -18,8 +22,13 @@ def _read_audio_files(folder: str, filenames: list[str], errors: list[str]):
         if not is_audio_file(path): continue
         try:
             metas.append(read_audio_metadata(path))
-        except Exception as e:
-            LOGGER.warning('Skipping %s during audio scan: %s', path, e, exc_info=True)
+        except (mutagen.MutagenError, MP4MetadataError, struct.error, Exception) as e:
+            LOGGER.warning(
+                'Audio scan warning: %s: %s',
+                path,
+                e,
+                exc_info=LOGGER.isEnabledFor(logging.DEBUG),
+            )
             errors.append(f'{path}: {e}')
     return metas
 
