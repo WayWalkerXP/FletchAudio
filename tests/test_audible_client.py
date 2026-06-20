@@ -18,7 +18,7 @@ def test_asin_url_construction():
     assert 'category_ladders' in url
     assert 'image_sizes=1000%2C700%2C500' in url
 
-from metadata_collector.audible_client import parse_search_results, runtime_difference_minutes, sort_results_by_runtime_match
+from metadata_collector.audible_client import get_runtime_match_category, parse_search_results, runtime_difference_minutes, sort_results_by_runtime_match
 from metadata_collector.models import AudioFileMetadata, Book
 
 
@@ -36,6 +36,21 @@ def test_parse_search_results_multiple_products_returned():
     assert results[0].series_title == 'S'
     assert results[0].series_sequence == '1'
     assert results[1].asin == 'A2'
+
+
+def test_runtime_match_category_thresholds():
+    assert get_runtime_match_category(600, 603) == 'green'
+    assert get_runtime_match_category(600, 605) == 'green'
+    assert get_runtime_match_category(600, 606) == 'amber'
+    assert get_runtime_match_category(600, 614) == 'amber'
+    assert get_runtime_match_category(600, 615) == 'red'
+    assert get_runtime_match_category(600, 630) == 'red'
+
+
+def test_runtime_match_category_missing_or_invalid_runtime_is_uncolored():
+    assert get_runtime_match_category(None, 600) is None
+    assert get_runtime_match_category(600, None) is None
+    assert get_runtime_match_category('bad', 600) is None
 
 
 def test_runtime_sorting_uses_closest_source_runtime_match():
