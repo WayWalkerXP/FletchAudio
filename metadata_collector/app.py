@@ -124,7 +124,7 @@ from .audio_scan import scan_directory
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
 from .history import create_change_group, log_changes, metadata_diff, store_snapshot
 from .metadata_map import normalize_response
-from .mass_update import discover_folder_book_tracks, format_track_number, guess_track_number_from_filename, save_track_title_rows, track_sort_key
+from .mass_update import changed_track_title_rows, discover_folder_book_tracks, format_track_number, guess_track_number_from_filename, save_track_title_rows, track_sort_key
 from .maintenance import compact_database, database_path, format_bytes, get_database_size_display
 from .staging import destination_for, discover_staging_candidates, move_to_staging, safe_move_to_staging, validate_staging_dir
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
@@ -1262,6 +1262,7 @@ def main(page: ft.Page):
                 logging.warning('Mass Update unreadable file id=%s file=%s error=%s', mass_update_screen_id, row.path, row.error)
         sort_field=ft.Dropdown(label='Sort by', value='filename', width=180, options=[ft.dropdown.Option('filename', 'Filename'), ft.dropdown.Option('track', 'Track'), ft.dropdown.Option('title', 'Title')])
         sort_direction=ft.Dropdown(label='Direction', value='ascending', width=170, options=[ft.dropdown.Option('ascending', 'Ascending'), ft.dropdown.Option('descending', 'Descending')])
+        sort_apply_button=ft.FilledButton('Apply')
         table=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=0)
         action_footer_height=72
         metadata_dirty={'value': False}
@@ -1271,6 +1272,7 @@ def main(page: ft.Page):
         divider_color=ft.Colors.OUTLINE_VARIANT
         row_border=ft.Border(bottom=ft.BorderSide(1, divider_color))
         column_border=ft.Border(left=ft.BorderSide(1, divider_color))
+        row_controls={}
 
         def cell(content, width, border=None, padding=8):
             if isinstance(content, str):
@@ -1294,6 +1296,22 @@ def main(page: ft.Page):
         def row_value(row, field):
             return getattr(row, field) or ''
 
+        def sync_row_controls():
+            for controls in list(row_controls.values()):
+                row=controls.get('row')
+                if row is None:
+                    continue
+                checkbox=controls.get('selected')
+                track_field=controls.get('track')
+                title_field=controls.get('title')
+                if checkbox is not None:
+                    row.selected=bool(checkbox.value)
+                if track_field is not None:
+                    row.track=track_field.value or ''
+                if title_field is not None:
+                    row.title=title_field.value or ''
+            refresh_metadata_dirty()
+
         def sorted_visible_rows():
             reverse=sort_direction.value == 'descending'
             if sort_field.value == 'track':
@@ -1303,7 +1321,9 @@ def main(page: ft.Page):
             return sorted(rows, key=key, reverse=reverse)
 
         def render_rows():
+            logging.info('Grid rebuild started id=%s', mass_update_screen_id)
             table.controls=[]
+            row_controls.clear()
             table.controls.append(ft.Row([
                 cell(ft.Text('Select', weight=ft.FontWeight.BOLD), 90),
                 cell(ft.Text('Filename', weight=ft.FontWeight.BOLD), 320, column_border),
@@ -1336,6 +1356,7 @@ def main(page: ft.Page):
                 checkbox.on_change=on_selected
                 track_field.on_change=on_track
                 title_field.on_change=on_title
+                row_controls[id(row)]={'row': row, 'selected': checkbox, 'track': track_field, 'title': title_field}
                 status_label='OK' if row.readable else f'Unreadable: {row.error}'
                 table.controls.append(ft.Container(content=ft.Row([
                     cell(checkbox, 90),
@@ -1344,14 +1365,18 @@ def main(page: ft.Page):
                     cell(title_field, 360, column_border),
                     cell(status_label, 160, column_border),
                 ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START), border=row_border))
+            logging.info('Grid rebuild completed id=%s row_count=%s', mass_update_screen_id, len(rows))
             page.update()
 
-        def sort_changed(e):
-            logging.info('Mass Update sort change id=%s sort=%s direction=%s', mass_update_screen_id, sort_field.value, sort_direction.value)
+        def apply_sort_clicked(e):
+            logging.info('Mass Update sort apply clicked id=%s', mass_update_screen_id)
+            logging.info('Sort field id=%s value=%s', mass_update_screen_id, sort_field.value)
+            logging.info('Sort direction id=%s value=%s', mass_update_screen_id, sort_direction.value)
+            logging.info('Row count id=%s value=%s', mass_update_screen_id, len(rows))
+            sync_row_controls()
             render_rows()
 
-        sort_field.on_change=sort_changed
-        sort_direction.on_change=sort_changed
+        sort_apply_button.on_click=apply_sort_clicked
 
         def future_placeholder(action):
             logging.info('Mass Update future action clicked id=%s action=%s', mass_update_screen_id, action)
@@ -1359,6 +1384,7 @@ def main(page: ft.Page):
             open_dialog(dialog)
 
         def selected_rows_in_visible_order():
+            sync_row_controls()
             return [row for row in sorted_visible_rows() if row.selected]
 
         def guess_tracks_clicked(e):
@@ -1439,22 +1465,26 @@ def main(page: ft.Page):
                         row.track=new_track
                         updated += 1
                 return updated
-            def save_dialog_values(_):
-                logging.info('Auto-Track Save clicked id=%s', mass_update_screen_id)
+            async def save_exit_dialog_values(e):
+                logging.info('Auto-Track Save and Exit clicked id=%s', mass_update_screen_id)
                 updated=apply_auto_track_to_rows()
+                refresh_metadata_dirty()
+                logging.info('Changed rows count id=%s value=%s', mass_update_screen_id, len(changed_track_title_rows(rows)))
+                progress=open_progress_dialog('Saving Auto-Track changes...')
+                await asyncio.sleep(0.1)
+                successes, unchanged, failures=save_track_title_rows(rows)
+                close_dialog(progress)
+                logging.info('Saved rows count id=%s value=%s', mass_update_screen_id, successes)
+                logging.info('Failed rows count id=%s value=%s', mass_update_screen_id, len(failures))
                 close_dialog(dialog)
-                if updated:
-                    mark_unsaved('auto-track')
-                    render_rows()
-                logging.info('Auto-Track rows updated id=%s updated=%s', mass_update_screen_id, updated)
-            def save_exit_dialog_values(e):
-                logging.info('Auto-Track Save & Exit clicked id=%s', mass_update_screen_id)
-                updated=apply_auto_track_to_rows()
-                if updated:
-                    refresh_metadata_dirty()
-                    render_rows()
-                close_dialog(dialog)
-                page.run_task(save_clicked, e, True) if hasattr(page, 'run_task') else asyncio.create_task(save_clicked(e, True))
+                refresh_metadata_dirty()
+                render_rows()
+                logging.info('Returning to Mass Update screen id=%s', mass_update_screen_id)
+                summary=f'Saved: {successes}\nUnchanged: {unchanged}\nFailed: {len(failures)}'
+                if failures:
+                    summary += '\nFailed: ' + ', '.join(f'{row.filename}: {error}' for row, error in failures[:5])
+                result_dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Track save complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda ev: close_dialog(result_dialog))])
+                open_dialog(result_dialog)
             def cancel_dialog_values(_):
                 logging.info('Auto-Track Cancel clicked id=%s dirty=%s', mass_update_screen_id, dialog_dirty['value'])
                 if not dialog_dirty['value']:
@@ -1471,7 +1501,9 @@ def main(page: ft.Page):
                 confirm_dialog=ft.AlertDialog(modal=True, title=ft.Text('Discard Auto-Track changes?'), content=ft.Text('You have unsaved Auto-Track changes.'), actions=[ft.TextButton('Stay', on_click=stay), ft.FilledButton('Discard', on_click=discard)])
                 open_dialog(confirm_dialog)
             content=ft.Column([starting_field, error_text, ft.Container(content=ft.Column(list_rows, scroll=ft.ScrollMode.AUTO), width=520, height=360)], tight=True, spacing=10)
-            dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Track'), content=content, actions=[ft.TextButton('Cancel', on_click=cancel_dialog_values), ft.Button('Apply', on_click=apply_dialog_values), ft.Button('Save', on_click=save_dialog_values), ft.FilledButton('Save & Exit', on_click=save_exit_dialog_values)])
+            def save_exit_handler(e):
+                page.run_task(save_exit_dialog_values, e) if hasattr(page, 'run_task') else asyncio.create_task(save_exit_dialog_values(e))
+            dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Track'), content=content, actions=[ft.TextButton('Cancel', on_click=cancel_dialog_values), ft.Button('Apply', on_click=apply_dialog_values), ft.FilledButton('Save and Exit', on_click=save_exit_handler)])
             open_dialog(dialog)
 
         def return_to_main():
@@ -1492,6 +1524,7 @@ def main(page: ft.Page):
 
         async def save_clicked(e, exit_after=False):
             logging.info('Mass Update %s clicked id=%s', 'Save & Exit' if exit_after else 'Save', mass_update_screen_id)
+            sync_row_controls()
             progress=open_progress_dialog('Saving Mass Update changes...')
             await asyncio.sleep(0.1)
             successes, unchanged, failures=save_track_title_rows(rows)
@@ -1528,7 +1561,7 @@ def main(page: ft.Page):
         mass_update_content=ft.Column([
             title_text,
             ft.Text(f'Folder: {folder_path}', selectable=True),
-            ft.Row([sort_field, sort_direction, unsaved_text], spacing=12, wrap=True),
+            ft.Row([sort_field, sort_direction, sort_apply_button, unsaved_text], spacing=12, wrap=True),
             ft.Container(content=table, expand=True, width=1090),
             ft.Container(
                 content=action_buttons,
