@@ -1263,6 +1263,8 @@ def main(page: ft.Page):
         sort_field=ft.Dropdown(label='Sort by', value='filename', width=180, options=[ft.dropdown.Option('filename', 'Filename'), ft.dropdown.Option('track', 'Track'), ft.dropdown.Option('title', 'Title')])
         sort_direction=ft.Dropdown(label='Direction', value='ascending', width=170, options=[ft.dropdown.Option('ascending', 'Ascending'), ft.dropdown.Option('descending', 'Descending')])
         table=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=0)
+        table_scroll_container_height=520
+        action_footer_height=72
         unsaved={'value': False}
         title_text=ft.Text('Mass Update', size=24, weight=ft.FontWeight.BOLD)
         unsaved_text=ft.Text('', color=ft.Colors.AMBER)
@@ -1381,20 +1383,32 @@ def main(page: ft.Page):
         def save_exit_button_handler(e):
             page.run_task(save_clicked, e, True) if hasattr(page, 'run_task') else asyncio.create_task(save_clicked(e, True))
 
+        action_buttons=ft.Row([
+            ft.Button('Guess Tracks', on_click=lambda e: future_placeholder('Guess Tracks')),
+            ft.Button('Auto-Track', on_click=lambda e: future_placeholder('Auto-Track')),
+            ft.Button('Auto-Title', on_click=lambda e: future_placeholder('Auto-Title')),
+            ft.Button('Set Title', on_click=lambda e: future_placeholder('Set Title')),
+            ft.TextButton('Cancel', on_click=cancel_clicked),
+            ft.FilledButton('Save', on_click=save_button_handler),
+            ft.FilledButton('Save & Exit', on_click=save_exit_button_handler),
+        ], spacing=8, wrap=True)
+        mass_update_content=ft.Column([
+            ft.Container(content=table, height=table_scroll_container_height, width=1090),
+            ft.Container(
+                content=action_buttons,
+                height=action_footer_height,
+                width=1090,
+                alignment=ft.alignment.center_left,
+                padding=ft.padding.only(top=12),
+                border=ft.Border(top=ft.BorderSide(1, divider_color)),
+            ),
+        ], spacing=0)
+
         replace_page_controls(
             title_text,
             ft.Text(f'Folder: {folder_path}', selectable=True),
             ft.Row([sort_field, sort_direction, unsaved_text], spacing=12, wrap=True),
-            ft.Container(content=table, height=520, width=1090),
-            ft.Row([
-                ft.Button('Guess Tracks', on_click=lambda e: future_placeholder('Guess Tracks')),
-                ft.Button('Auto-Track', on_click=lambda e: future_placeholder('Auto-Track')),
-                ft.Button('Auto-Title', on_click=lambda e: future_placeholder('Auto-Title')),
-                ft.Button('Set Title', on_click=lambda e: future_placeholder('Set Title')),
-                ft.TextButton('Cancel', on_click=cancel_clicked),
-                ft.FilledButton('Save', on_click=save_button_handler),
-                ft.FilledButton('Save & Exit', on_click=save_exit_button_handler),
-            ], spacing=8, wrap=True),
+            mass_update_content,
             status,
         )
         render_rows()
