@@ -1399,7 +1399,7 @@ def main(page: ft.Page):
                 height=action_footer_height,
                 width=1090,
                 alignment=ft.Alignment.CENTER_LEFT,
-                padding=ft.padding.only(top=12),
+                padding=padding_only(top=12),
                 border=ft.Border(top=ft.BorderSide(1, divider_color)),
             ),
         ], spacing=0)
