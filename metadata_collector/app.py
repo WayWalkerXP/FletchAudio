@@ -1457,6 +1457,9 @@ def main(page: ft.Page):
                 error_text.value=''
                 logging.info('Auto-Track rows updated in dialog id=%s rows=%s width=%s', mass_update_screen_id, len(track_fields), width)
                 page.update()
+            auto_track_dialog_open={'value': True}
+            def auto_track_dialog_is_open():
+                return bool(auto_track_dialog_open['value'] and getattr(dialog, 'open', False))
             def apply_auto_track_to_rows():
                 updated=0
                 for row, field in track_fields:
@@ -1465,29 +1468,48 @@ def main(page: ft.Page):
                         row.track=new_track
                         updated += 1
                 return updated
+            def close_auto_track_lifecycle_dialogs():
+                logging.info('Closing Auto-Track dialog id=%s', mass_update_screen_id)
+                auto_track_dialog_open['value']=False
+                for action in dialog.actions or []:
+                    if hasattr(action, 'on_click'):
+                        action.on_click=None
+                logging.info('Removing Auto-Track overlays id=%s', mass_update_screen_id)
+                clear_dialog_state(dialog)
+                page.update()
             async def save_exit_dialog_values(e):
                 logging.info('Auto-Track Save and Exit clicked id=%s', mass_update_screen_id)
-                updated=apply_auto_track_to_rows()
+                apply_auto_track_to_rows()
                 refresh_metadata_dirty()
                 logging.info('Changed rows count id=%s value=%s', mass_update_screen_id, len(changed_track_title_rows(rows)))
                 progress=open_progress_dialog('Saving Auto-Track changes...')
                 await asyncio.sleep(0.1)
                 successes, unchanged, failures=save_track_title_rows(rows)
                 close_dialog(progress)
+                logging.info('Auto-Track save successful id=%s saved=%s unchanged=%s failures=%s', mass_update_screen_id, successes, unchanged, len(failures))
                 logging.info('Saved rows count id=%s value=%s', mass_update_screen_id, successes)
                 logging.info('Failed rows count id=%s value=%s', mass_update_screen_id, len(failures))
-                close_dialog(dialog)
+                dialog_dirty['value']=False
+                logging.info('Auto-Track dirty state cleared id=%s', mass_update_screen_id)
+                close_auto_track_lifecycle_dialogs()
                 refresh_metadata_dirty()
                 render_rows()
                 logging.info('Returning to Mass Update screen id=%s', mass_update_screen_id)
+                logging.info('Auto-Track lifecycle complete id=%s', mass_update_screen_id)
                 summary=f'Saved: {successes}\nUnchanged: {unchanged}\nFailed: {len(failures)}'
                 if failures:
                     summary += '\nFailed: ' + ', '.join(f'{row.filename}: {error}' for row, error in failures[:5])
                 result_dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Track save complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda ev: close_dialog(result_dialog))])
                 open_dialog(result_dialog)
             def cancel_dialog_values(_):
-                logging.info('Auto-Track Cancel clicked id=%s dirty=%s', mass_update_screen_id, dialog_dirty['value'])
+                dialog_open=auto_track_dialog_is_open()
+                logging.info('Auto-Track Cancel clicked id=%s', mass_update_screen_id)
+                logging.info('Auto-Track dirty state=%s id=%s', dialog_dirty['value'], mass_update_screen_id)
+                logging.info('Auto-Track dialog open=%s id=%s', dialog_open, mass_update_screen_id)
+                if not dialog_open:
+                    return
                 if not dialog_dirty['value']:
+                    auto_track_dialog_open['value']=False
                     close_dialog(dialog)
                     return
                 confirm_dialog=None
@@ -1496,6 +1518,7 @@ def main(page: ft.Page):
                 def discard(_):
                     logging.info('Auto-Track discard confirmed id=%s', mass_update_screen_id)
                     close_dialog(confirm_dialog)
+                    auto_track_dialog_open['value']=False
                     close_dialog(dialog)
                     page.update()
                 confirm_dialog=ft.AlertDialog(modal=True, title=ft.Text('Discard Auto-Track changes?'), content=ft.Text('You have unsaved Auto-Track changes.'), actions=[ft.TextButton('Stay', on_click=stay), ft.FilledButton('Discard', on_click=discard)])
