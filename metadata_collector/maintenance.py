@@ -1,7 +1,10 @@
 from __future__ import annotations
+import logging
 from pathlib import Path
 from sqlalchemy import text
 from .history import cleanup_cover_bloat
+
+logger = logging.getLogger(__name__)
 
 
 def database_path(engine) -> Path | None:
@@ -16,6 +19,32 @@ def database_size_bytes(engine) -> int | None:
     if not path or not path.exists():
         return None
     return path.stat().st_size
+
+
+def get_database_size_bytes(db_path: Path) -> int:
+    if not db_path.exists():
+        return 0
+    return db_path.stat().st_size
+
+
+def format_database_size(size_bytes: int) -> str:
+    size_kb = size_bytes / 1024
+    if size_kb < 1000:
+        return f'{round(size_kb)} KB'
+    return f'{size_kb / 1024:.1f} MB'
+
+
+def get_database_size_display(db_path: Path | None) -> str:
+    if db_path is None:
+        logger.info('Database size read: 0 KB')
+        return '0 KB'
+    try:
+        size_display = format_database_size(get_database_size_bytes(db_path))
+    except OSError:
+        logger.exception('Unable to determine database size')
+        return 'Size unavailable'
+    logger.info('Database size read: %s', size_display)
+    return size_display
 
 
 def compact_database(engine, Session) -> dict[str, int | None]:

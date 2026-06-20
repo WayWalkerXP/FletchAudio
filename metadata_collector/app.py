@@ -112,7 +112,7 @@ from .audio_scan import scan_directory
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
 from .history import create_change_group, log_changes, metadata_diff, store_snapshot
 from .metadata_map import normalize_response
-from .maintenance import compact_database, format_bytes
+from .maintenance import compact_database, database_path, format_bytes, get_database_size_display
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
 from .history_restore import changes_for_group_file, is_restore_supported, list_change_groups_for_file, restore_selected_metadata
 logging.basicConfig(level=logging.INFO)
@@ -120,13 +120,19 @@ logging.basicConfig(level=logging.INFO)
 def main(page: ft.Page):
     engine=init_db(); Session=get_session_factory(engine); settings=load_settings(); books=[]
     page.title='FletchAudio'; page.theme_mode=theme_mode_for_setting(settings.get('theme'))
-    status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); url_launcher=ft.UrlLauncher(); audible=AudibleClient()
+    status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(on_click=None)
     if hasattr(page, 'services'):
         page.services.append(url_launcher)
     elif hasattr(page, 'overlay'):
         page.overlay.append(url_launcher)
     def show_status(message: str):
         status.value=message; page.update()
+    def compact_database_button_text() -> str:
+        return f'Compact Database ({get_database_size_display(database_path(engine))})'
+
+    def refresh_compact_database_button():
+        compact_db_button.text = compact_database_button_text()
+
     def show_success(message: str):
         snack_bar = ft.SnackBar(ft.Text(message))
         open_control = getattr(page, 'open', None)
@@ -1097,6 +1103,7 @@ def main(page: ft.Page):
         open_dialog(dialog)
 
     def render():
+        refresh_compact_database_button()
         grid.controls.clear()
 
         def text_cell(value, *, width=None, expand=None, tooltip=None, weight=None):
@@ -1205,6 +1212,9 @@ def main(page: ft.Page):
             return
         before = format_bytes(result.get('before_size_bytes'))
         after = format_bytes(result.get('after_size_bytes'))
+        updated_size = get_database_size_display(database_path(engine))
+        logging.info('Database compacted successfully. Updated size: %s', updated_size)
+        refresh_compact_database_button()
         show_success(f'Compacted database: {before} → {after}. Cleaned {result.get("snapshots", 0)} snapshots and {result.get("changes", 0)} change records.')
         show_status(f'Database compacted: {before} → {after}.')
     def apply_theme(e):
@@ -1231,6 +1241,8 @@ def main(page: ft.Page):
         status.value=f'Found {len(books)} books.' + (f' {len(errors)} scan warnings logged.' if errors else '')
         for err in errors: logging.warning(err)
         render()
-    page.add(ft.Row([ft.Button('Select Working Directory', on_click=select_working_directory), ft.Button('Rescan', on_click=lambda _: scan()), ft.Button('Compact Database', on_click=compact_database_handler), theme]), status, grid)
+    compact_db_button.on_click = compact_database_handler
+    refresh_compact_database_button()
+    page.add(ft.Row([ft.Button('Select Working Directory', on_click=select_working_directory), ft.Button('Rescan', on_click=lambda _: scan()), compact_db_button, theme]), status, grid)
     if settings.get('working_directory'): scan(settings['working_directory'])
 if __name__ == '__main__': ft.run(main)
