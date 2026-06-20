@@ -100,12 +100,21 @@ def main(page: ft.Page):
         dialog.open = True
         page.update()
     def close_dialog(dialog=None):
+        close_control = getattr(page, 'close', None)
+        if close_control and dialog:
+            close_control(dialog)
+            return
         pop_dialog = getattr(page, 'pop_dialog', None)
         if pop_dialog:
             pop_dialog()
             return
         if dialog:
             dialog.open = False
+            if getattr(page, 'dialog', None) is dialog:
+                page.dialog = None
+            overlay = getattr(page, 'overlay', None)
+            if overlay and dialog in overlay:
+                overlay.remove(dialog)
         page.update()
     def source_duration_seconds(book):
         durations=[f.duration for f in book.files if f.duration is not None]
@@ -244,14 +253,17 @@ def main(page: ft.Page):
                 ], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             )
 
+            close_dialog(dialog)
+            page.update()
             open_dialog(saving_dialog)
             page.update()
-            # Yield to Flet so the modal is sent to the client before the synchronous tag write starts.
+            # Yield to Flet so the comparison modal closes and the saving modal is sent to the client before the synchronous tag write starts.
             await asyncio.sleep(0.1)
             updates=normalize_for_dirty_check({field: downloaded for field, _, downloaded, _, _ in specs if field not in NON_WRITABLE_FIELDS and selected.get(field) and selected[field].value and is_present(downloaded)})
             if not updates:
                 close_dialog(saving_dialog)
                 apply_button.disabled=False
+                open_dialog(dialog)
                 page.update()
                 show_status('No downloaded metadata fields selected to apply.')
                 return
@@ -266,20 +278,27 @@ def main(page: ft.Page):
                         log_changes(session, group, book.key, file_metadata.path, changes, source_type)
                     session.commit()
                 close_dialog(saving_dialog)
-                close_dialog(dialog)
+                render()
                 show_success('Metadata changes saved.')
                 show_status('Metadata changes saved.')
-                render()
             except Exception as exc:
                 close_dialog(saving_dialog)
                 apply_button.disabled=False
+
+                def return_to_comparison(_):
+                    close_dialog(error_dialog)
+                    open_dialog(dialog)
+
+                def dismiss_error(_):
+                    close_dialog(error_dialog)
+
                 error_dialog=ft.AlertDialog(
                     modal=True,
                     title=ft.Text('Could not save metadata'),
                     content=ft.Text(f'Failed to apply metadata to {book.display_name}: {exc}'),
                     actions=[
-                        ft.TextButton('Retry', on_click=lambda e: close_dialog(error_dialog)),
-                        ft.TextButton('Cancel', on_click=lambda e: (close_dialog(error_dialog), close_dialog(dialog))),
+                        ft.TextButton('Retry', on_click=return_to_comparison),
+                        ft.TextButton('Cancel', on_click=dismiss_error),
                     ],
                 )
                 open_dialog(error_dialog)
