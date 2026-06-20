@@ -26,6 +26,7 @@ class AudioFileMetadata:
     description: str | None = None; publisher: str | None = None; published_year: str | None = None; published_date: str | None = None
     language: str | None = None; genres: list[str] = field(default_factory=list); track: int | None = None; disc: int | None = None
     duration: int | None = None; has_cover: bool = False; cover_data_uri: str | None = None; explicit: bool | None = None; dramatic_audio: bool | None = None
+    target_bitrate: int | None = None; target_channels: int | None = None
     def to_dict(self) -> dict[str, Any]: return asdict(self)
 
 @dataclass
