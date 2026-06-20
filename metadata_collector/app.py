@@ -120,7 +120,7 @@ logging.basicConfig(level=logging.INFO)
 def main(page: ft.Page):
     engine=init_db(); Session=get_session_factory(engine); settings=load_settings(); books=[]
     page.title='FletchAudio'; page.theme_mode=theme_mode_for_setting(settings.get('theme'))
-    status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(on_click=None)
+    status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(content='Compact Database', on_click=None)
     if hasattr(page, 'services'):
         page.services.append(url_launcher)
     elif hasattr(page, 'overlay'):
@@ -131,7 +131,7 @@ def main(page: ft.Page):
         return f'Compact Database ({get_database_size_display(database_path(engine))})'
 
     def refresh_compact_database_button():
-        compact_db_button.text = compact_database_button_text()
+        compact_db_button.content = compact_database_button_text()
 
     def show_success(message: str):
         snack_bar = ft.SnackBar(ft.Text(message))
