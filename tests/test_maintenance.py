@@ -7,6 +7,15 @@ from metadata_collector.maintenance import (
 )
 
 
+def test_compact_database_button_label_is_valid_flet_button_content():
+    from flet import Button
+
+    button = Button(content='Compact Database')
+    button.content = f'Compact Database ({get_database_size_display(Path("missing.db"))})'
+
+    assert button.content == 'Compact Database (0 KB)'
+
+
 def test_format_database_size_uses_kb_below_1000_kb():
     assert format_database_size(14 * 1024) == '14 KB'
     assert format_database_size(999 * 1024) == '999 KB'
