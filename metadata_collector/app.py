@@ -1354,6 +1354,22 @@ def main(page: ft.Page):
             replace_page_controls(mass_update_content)
             render_rows()
 
+        auto_track_result_returned={'value': False}
+
+        def return_to_mass_update_screen_from_auto_track_result(result_dialog=None):
+            if auto_track_result_returned['value']:
+                return
+            auto_track_result_returned['value']=True
+            logging.info('Auto-Track save complete OK clicked id=%s', mass_update_screen_id)
+            if result_dialog is not None:
+                close_dialog(result_dialog)
+            auto_track_open['value']=False
+            auto_track_dialog_state['dirty']=False
+            clear_dialog_state()
+            refresh_metadata_dirty()
+            render_mass_update_screen()
+            log_auto_track_final_state()
+
         def render_rows():
             logging.info('Grid rebuild started id=%s', mass_update_screen_id)
             table.controls=[]
@@ -1454,6 +1470,7 @@ def main(page: ft.Page):
 
         def auto_track_clicked(e):
             auto_track_open['value']=True
+            auto_track_result_returned['value']=False
             selected_rows=selected_rows_in_visible_order()
             logging.info('Auto-Track opened id=%s selected_rows=%s', mass_update_screen_id, len(selected_rows))
             starting_field=ft.TextField(label='Starting Track Number', value='1', width=220, dense=True)
@@ -1539,7 +1556,10 @@ def main(page: ft.Page):
                 summary=f'Saved: {successes}\nUnchanged: {unchanged}\nFailed: {len(failures)}'
                 if failures:
                     summary += '\nFailed: ' + ', '.join(f'{row.filename}: {error}' for row, error in failures[:5])
-                result_dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Track save complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda ev: close_dialog(result_dialog))])
+                result_dialog=None
+                def on_auto_track_save_complete_ok(_):
+                    return_to_mass_update_screen_from_auto_track_result(result_dialog)
+                result_dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Track save complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=on_auto_track_save_complete_ok)], on_dismiss=lambda _: return_to_mass_update_screen_from_auto_track_result(result_dialog))
                 open_dialog(result_dialog)
             def cancel_dialog_values(_):
                 dialog_open=auto_track_dialog_is_open()
