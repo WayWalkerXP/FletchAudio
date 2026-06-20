@@ -116,6 +116,7 @@ def margin_only(*, left=0, right=0, top=0, bottom=0):
     return ft.Margin(left=left, right=right, top=top, bottom=bottom)
 
 from .audible_client import AudibleClient, build_title_author_query, get_runtime_match_category, normalize_asin, parse_search_results, product_from_asin_response, runtime_difference_minutes, sort_results_by_runtime_match, validate_asin
+from .duplicate_checker import AbsConnectionError, DuplicateCheckStatus, normalize_asin_for_duplicate_check, query_abs_by_asin
 from .config import load_settings, save_settings
 from .db import init_db, get_session_factory
 from .audio_scan import scan_directory
@@ -146,7 +147,7 @@ def main(page: ft.Page):
     engine=init_db(); Session=get_session_factory(engine); settings=load_settings(); books=[]
     log_page_state(page, 'app startup before main window render')
     page.title='FletchAudio'; page.theme_mode=theme_mode_for_setting(settings.get('theme'))
-    status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(content='Compact Database', on_click=None)
+    status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); duplicate_statuses={}; url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(content='Compact Database', on_click=None)
     active_move_to_staging_screen_id=None
     current_screen='main'
     if hasattr(page, 'services'):
@@ -174,8 +175,9 @@ def main(page: ft.Page):
 
     def build_main_menu_controls():
         return [
-            ft.Row([ft.Button('Select Working Directory', on_click=select_working_directory), ft.Button('Rescan', on_click=lambda _: scan()), ft.Button('Move to Staging', on_click=show_move_to_staging), compact_db_button, theme], wrap=True),
+            ft.Row([ft.Button('Select Working Directory', on_click=select_working_directory), ft.Button('Rescan', on_click=lambda _: scan()), ft.Button('Check for Duplicates', on_click=check_for_duplicates), ft.Button('Move to Staging', on_click=show_move_to_staging), compact_db_button, theme], wrap=True),
             ft.Row([staging_dir_field, ft.Button('Browse Staging', on_click=select_staging_directory), ft.Button('Save Staging', on_click=save_staging_directory)], wrap=True),
+            ft.Row([abs_url_field, abs_api_key_field, ft.Button('Save ABS Settings', on_click=save_abs_settings)], wrap=True),
             status,
             grid,
         ]
@@ -1431,6 +1433,77 @@ def main(page: ft.Page):
         log_page_state(page, f'after showing completion dialog id={move_screen_id}')
         show_status(f'Move to staging complete: moved {counts["moved"]}, skipped {counts["skipped"]}, failed {counts["failed"]}.')
 
+
+    async def check_for_duplicates(_=None):
+        abs_url=(settings.get('abs_url') or '').strip()
+        api_key=(settings.get('abs_api_key') or '').strip()
+        if not abs_url or not api_key:
+            show_warning('Audiobookshelf not configured', 'Audiobookshelf connection is not configured. Please enter the ABS URL and API key in Settings.')
+            return
+        if not books:
+            show_status('No source books to check.')
+            return
+        logging.info('Duplicate check started.')
+        logging.info('Using Audiobookshelf URL: %s', abs_url)
+        logging.info('Duplicate check source books discovered: %s', len(books))
+        with_asin=sum(1 for book in books if normalize_asin_for_duplicate_check(getattr(book.files[0], 'asin', None)))
+        without_asin=len(books) - with_asin
+        logging.info('Duplicate check books with ASIN: %s', with_asin)
+        logging.info('Duplicate check books without ASIN: %s', without_asin)
+        duplicate_statuses.clear()
+        current_text=ft.Text('', selectable=True)
+        counts_text=ft.Text('Checked: 0\nDuplicates Found: 0\nNo Duplicates: 0\nNo ASIN: 0\nErrors: 0')
+        progress_dialog=ft.AlertDialog(modal=True, title=ft.Text('Checking duplicates...'), content=ft.Column([ft.ProgressRing(), current_text, counts_text], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER))
+        open_dialog(progress_dialog)
+        await asyncio.sleep(0.1)
+        counts={'checked':0, 'duplicates':0, 'no_duplicates':0, 'no_asin':0, 'errors':0}
+        try:
+            for index, book in enumerate(books, start=1):
+                source_path=Path(book.path)
+                asin=getattr(book.files[0], 'asin', None)
+                normalized=normalize_asin_for_duplicate_check(asin)
+                current_text.value=f'Checking duplicates {index} of {len(books)}'
+                counts_text.value=f'Checked: {counts["checked"]}\nDuplicates Found: {counts["duplicates"]}\nNo Duplicates: {counts["no_duplicates"]}\nNo ASIN: {counts["no_asin"]}\nErrors: {counts["errors"]}'
+                page.update()
+                if not normalized:
+                    counts['no_asin'] += 1
+                    duplicate_statuses[book.key]=DuplicateCheckStatus(source_path, None, 'no_asin')
+                    logging.info('Duplicate check skipped %s: no ASIN', source_path)
+                    render()
+                    await asyncio.sleep(0)
+                    continue
+                counts['checked'] += 1
+                logging.info('Checking ASIN %s for %s', normalized, source_path)
+                try:
+                    matches=query_abs_by_asin(abs_url, api_key, asin)
+                    if matches:
+                        counts['duplicates'] += 1
+                        duplicate_statuses[book.key]=DuplicateCheckStatus(source_path, asin, 'duplicate', len(matches))
+                        logging.info('ABS duplicate result for ASIN %s: duplicate matches=%s', normalized, len(matches))
+                    else:
+                        counts['no_duplicates'] += 1
+                        duplicate_statuses[book.key]=DuplicateCheckStatus(source_path, asin, 'no_duplicate', 0)
+                        logging.info('ABS duplicate result for ASIN %s: no duplicate', normalized)
+                except AbsConnectionError:
+                    raise
+                except Exception as exc:
+                    counts['errors'] += 1
+                    duplicate_statuses[book.key]=DuplicateCheckStatus(source_path, asin, 'error', 0, str(exc))
+                    logging.exception('Duplicate check API error for ASIN %s', normalized)
+                render()
+                await asyncio.sleep(0)
+        except AbsConnectionError as exc:
+            close_dialog(progress_dialog)
+            logging.exception('Global Audiobookshelf duplicate check failure')
+            show_warning('Unable to connect to Audiobookshelf', 'Unable to connect to Audiobookshelf. Please verify the ABS URL and API key in Settings.')
+            return
+        close_dialog(progress_dialog)
+        summary=f'Duplicate Check Complete\n\nChecked: {counts["checked"]}\nDuplicates Found: {counts["duplicates"]}\nNo Duplicates: {counts["no_duplicates"]}\nNo ASIN: {counts["no_asin"]}\nErrors: {counts["errors"]}'
+        logging.info('Duplicate check final summary: %s', summary.replace('\n', ' | '))
+        summary_dialog=ft.AlertDialog(modal=True, title=ft.Text('Duplicate Check Complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda e: close_dialog(summary_dialog))])
+        open_dialog(summary_dialog)
+        show_status(f'Duplicate check complete: {counts["duplicates"]} duplicate(s), {counts["no_duplicates"]} no duplicate(s), {counts["errors"]} error(s).')
+
     def render():
         nonlocal current_screen
         current_screen='main'
@@ -1457,6 +1530,19 @@ def main(page: ft.Page):
                 expanded_book_keys.add(book.key)
             render()
 
+        def duplicate_status_pill(book):
+            duplicate_status=duplicate_statuses.get(book.key)
+            if not duplicate_status:
+                return ft.Container(width=126)
+            pill_specs={
+                'duplicate': ('ABS Duplicate', ft.Colors.RED, ft.Colors.WHITE),
+                'no_duplicate': ('No Duplicate', ft.Colors.GREEN, ft.Colors.WHITE),
+                'no_asin': ('No ASIN', ft.Colors.GREY_600, ft.Colors.WHITE),
+                'error': ('Check Failed', ft.Colors.RED_900, ft.Colors.WHITE),
+            }
+            label, bgcolor, color=pill_specs.get(duplicate_status.status, ('Unknown', ft.Colors.GREY_600, ft.Colors.WHITE))
+            return ft.Container(content=ft.Text(label, color=color, size=12, weight=ft.FontWeight.BOLD), bgcolor=bgcolor, border_radius=999, padding=padding_symmetric(horizontal=10, vertical=4), width=126, alignment=ft.Alignment(0, 0), tooltip=duplicate_status.message or None)
+
         def book_top_row(book, first):
             series=' '.join(part for part in [first.series, first.series_sequence] if part)
             expanded=book.key in expanded_book_keys
@@ -1472,6 +1558,7 @@ def main(page: ft.Page):
                 text_cell(first.narrator, expand=3),
                 text_cell(series, expand=4),
                 text_cell(first.asin, width=110),
+                duplicate_status_pill(book),
                 text_cell(f'{len(book.files)} track' + ('' if len(book.files) == 1 else 's'), width=92),
                 ft.Container(
                     content=ft.IconButton(
@@ -1532,7 +1619,7 @@ def main(page: ft.Page):
                     padding=12,
                     margin=margin_only(bottom=10),
                     border_radius=8,
-                    bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+                    bgcolor=ft.Colors.with_opacity(0.34, ft.Colors.AMBER_900) if duplicate_statuses.get(b.key) and duplicate_statuses[b.key].status == 'duplicate' else ft.Colors.SURFACE_CONTAINER_HIGHEST,
                 )
             )
         page.update()
@@ -1557,6 +1644,8 @@ def main(page: ft.Page):
         settings['theme']=selected_theme; save_settings(settings); page.theme_mode=theme_mode_for_setting(selected_theme); page.update()
     theme=ft.Dropdown(label='Theme', value=settings.get('theme','System'), options=[ft.dropdown.Option(x) for x in THEME_OPTIONS])
     staging_dir_field=ft.TextField(label='Staging Directory', value=settings.get('staging_dir') or '', width=320)
+    abs_url_field=ft.TextField(label='ABS Base URL', value=settings.get('abs_url') or '', width=320)
+    abs_api_key_field=ft.TextField(label='ABS API Key', value=settings.get('abs_api_key') or '', password=True, can_reveal_password=False, width=260)
     if hasattr(theme, 'on_select'):
         theme.on_select=apply_theme
     if hasattr(theme, 'on_change'):
@@ -1574,6 +1663,15 @@ def main(page: ft.Page):
     def save_staging_directory(e):
         path=(staging_dir_field.value or '').strip()
         settings['staging_dir']=path or None; save_settings(settings); show_status('Staging directory saved.' if path else 'Staging directory cleared.'); page.update()
+    def save_abs_settings(e):
+        abs_url=(abs_url_field.value or '').strip()
+        api_key=(abs_api_key_field.value or '').strip()
+        settings['abs_url']=abs_url or None
+        settings['abs_api_key']=api_key or None
+        save_settings(settings)
+        abs_api_key_field.value=api_key
+        show_status('Audiobookshelf settings saved.' if abs_url and api_key else 'Audiobookshelf settings incomplete.')
+        page.update()
     def scan(path=None):
         nonlocal books
         path=path or settings.get('working_directory')
