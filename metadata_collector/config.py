@@ -6,5 +6,5 @@ DEFAULT_DB_URL = f"sqlite:///{APP_DIR/'fletchaudio.sqlite3'}"
 SETTINGS_FILE = APP_DIR/'settings.json'
 def load_settings():
     try: return json.loads(SETTINGS_FILE.read_text())
-    except Exception: return {'theme':'System','working_directory':None}
+    except Exception: return {'theme':'System','working_directory':None,'staging_dir':None}
 def save_settings(settings): SETTINGS_FILE.write_text(json.dumps(settings, indent=2))

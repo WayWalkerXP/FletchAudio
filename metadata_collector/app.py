@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import logging
+from pathlib import Path
 
 import flet as ft
 from mutagen import File, MutagenError
@@ -113,6 +114,7 @@ from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_m
 from .history import create_change_group, log_changes, metadata_diff, store_snapshot
 from .metadata_map import normalize_response
 from .maintenance import compact_database, database_path, format_bytes, get_database_size_display
+from .staging import candidates_from_books, move_to_staging, safe_move_to_staging, validate_staging_dir
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
 from .history_restore import changes_for_group_file, is_restore_supported, list_change_groups_for_file, restore_selected_metadata
 logging.basicConfig(level=logging.INFO)
@@ -1102,6 +1104,126 @@ def main(page: ft.Page):
         load_file(history_files[0].path)
         open_dialog(dialog)
 
+    def show_warning(title, message):
+        warning_dialog=ft.AlertDialog(
+            modal=True,
+            title=ft.Text(title),
+            content=ft.Text(message, selectable=True),
+            actions=[ft.TextButton('OK', on_click=lambda e: close_dialog(warning_dialog))],
+        )
+        open_dialog(warning_dialog)
+        show_status(message)
+
+    def show_move_to_staging(_=None):
+        logging.info('Opening Move to Staging screen')
+        staging_value=(settings.get('staging_dir') or '').strip()
+        if not staging_value:
+            show_warning('Staging directory required', 'No staging directory is configured. Please configure a staging directory in Settings before moving books to staging.')
+            return
+        staging_dir=Path(staging_value).expanduser()
+        ok, message=validate_staging_dir(staging_dir)
+        if not ok:
+            show_warning('Staging directory unavailable', message)
+            return
+        candidates=candidates_from_books(books)
+        logging.info('Move to Staging candidate count: %s', len(candidates))
+        selected_checks={}
+        rows=[]
+        divider_color=ft.Colors.OUTLINE_VARIANT
+        row_border=ft.Border(bottom=ft.BorderSide(1, divider_color))
+        column_border=ft.Border(left=ft.BorderSide(1, divider_color))
+        def cell(content, width, border=None, padding=8):
+            if isinstance(content, str):
+                content=ft.Text(content, selectable=True, width=width - (padding * 2), no_wrap=False)
+            return ft.Container(content=content, width=width, padding=padding, border=border)
+        if candidates:
+            rows.append(ft.Row([
+                cell(ft.Text('Move', weight=ft.FontWeight.BOLD), 80),
+                cell(ft.Text('Book', weight=ft.FontWeight.BOLD), 220, column_border),
+                cell(ft.Text('Type', weight=ft.FontWeight.BOLD), 80, column_border),
+                cell(ft.Text('Current Location', weight=ft.FontWeight.BOLD), 360, column_border),
+                cell(ft.Text('Target Bitrate', weight=ft.FontWeight.BOLD), 130, column_border),
+                cell(ft.Text('Target Channels', weight=ft.FontWeight.BOLD), 140, column_border),
+            ], spacing=0))
+            for candidate in candidates:
+                checkbox=ft.Checkbox(value=True)
+                selected_checks[candidate.source_path]=checkbox
+                rows.append(ft.Container(content=ft.Row([
+                    cell(checkbox, 80),
+                    cell(candidate.display_name, 220, column_border),
+                    cell('Folder' if candidate.item_type == 'folder' else 'File', 80, column_border),
+                    cell(str(candidate.source_path), 360, column_border),
+                    cell(candidate.target_bitrate, 130, column_border),
+                    cell(candidate.target_channels, 140, column_border),
+                ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START), border=row_border))
+        else:
+            rows.append(ft.Text('No books are ready for staging. Books must have both target_bitrate and target_channels defined before they can be moved.'))
+
+        async def confirm_move(_):
+            selected=[candidate for candidate in candidates if selected_checks[candidate.source_path].value]
+            if not selected:
+                show_status('No books selected for staging.')
+                return
+            for candidate in selected:
+                logging.info('Selected staging item: %s', candidate.source_path)
+            message=f'{len(selected)} selected book(s) will be moved to:\n{staging_dir}\n\nFiles/folders will be moved out of the working directory.'
+            async def run_mode(mode):
+                close_dialog(confirm_dialog)
+                close_dialog(dialog)
+                await run_staging_move(selected, staging_dir, mode)
+            confirm_dialog=ft.AlertDialog(
+                modal=True,
+                title=ft.Text('Confirm Move to Staging'),
+                content=ft.Text(message, selectable=True),
+                actions=[
+                    ft.TextButton('Cancel', on_click=lambda e: close_dialog(confirm_dialog)),
+                    ft.FilledButton('Safe Move', on_click=lambda e: page.run_task(run_mode, 'Safe Move') if hasattr(page, 'run_task') else asyncio.create_task(run_mode('Safe Move'))),
+                    ft.FilledButton('Move', on_click=lambda e: page.run_task(run_mode, 'Move') if hasattr(page, 'run_task') else asyncio.create_task(run_mode('Move'))),
+                ],
+            )
+            open_dialog(confirm_dialog)
+
+        dialog=ft.AlertDialog(
+            modal=True,
+            title=ft.Text('Move to Staging'),
+            content=ft.Column(rows, scroll=ft.ScrollMode.AUTO, height=520, width=1030, spacing=0),
+            actions=[ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog)), ft.FilledButton('Move', disabled=not candidates, on_click=confirm_move)],
+        )
+        open_dialog(dialog)
+
+    async def run_staging_move(selected, staging_dir: Path, mode: str):
+        ok, message=validate_staging_dir(staging_dir)
+        if not ok:
+            show_warning('Staging directory unavailable', message)
+            return
+        logging.info('Starting Move to Staging mode=%s destination=%s selected=%s', mode, staging_dir, len(selected))
+        current_text=ft.Text('', selectable=True)
+        counts_text=ft.Text('Completed: 0\nSkipped: 0\nFailed: 0')
+        progress_dialog=ft.AlertDialog(modal=True, title=ft.Text('Moving to staging...'), content=ft.Column([ft.ProgressRing(), current_text, counts_text], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER))
+        open_dialog(progress_dialog)
+        await asyncio.sleep(0.1)
+        results=[]
+        counts={'moved':0, 'skipped':0, 'failed':0}
+        mover=safe_move_to_staging if mode == 'Safe Move' else move_to_staging
+        for index, candidate in enumerate(selected, start=1):
+            current_text.value=f'Moving {index} of {len(selected)}: {candidate.display_name}'
+            counts_text.value=f'Completed: {counts["moved"]}\nSkipped: {counts["skipped"]}\nFailed: {counts["failed"]}'
+            page.update()
+            result=mover(candidate, staging_dir)
+            results.append(result)
+            counts[result.status]=counts.get(result.status, 0) + 1
+            logging.info('Staging result: %s -> %s status=%s message=%s', result.source_path, result.destination_path, result.status, result.message)
+            await asyncio.sleep(0)
+        close_dialog(progress_dialog)
+        summary=f'Move to Staging Complete\n\nMoved: {counts["moved"]}\nSkipped: {counts["skipped"]}\nFailed: {counts["failed"]}\n\nDestination:\n{staging_dir}'
+        details='\n'.join(result.message for result in results if result.status != 'moved')
+        if details:
+            summary=f'{summary}\n\nDetails:\n{details}'
+        logging.info('Move to Staging summary: %s', summary.replace('\n', ' | '))
+        summary_dialog=ft.AlertDialog(modal=True, title=ft.Text('Move to Staging Complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda e: (close_dialog(summary_dialog), scan()))])
+        open_dialog(summary_dialog)
+        show_status(f'Move to staging complete: moved {counts["moved"]}, skipped {counts["skipped"]}, failed {counts["failed"]}.')
+
     def render():
         refresh_compact_database_button()
         grid.controls.clear()
@@ -1221,6 +1343,7 @@ def main(page: ft.Page):
         selected_theme = getattr(getattr(e, 'control', None), 'value', None) or theme.value or 'System'
         settings['theme']=selected_theme; save_settings(settings); page.theme_mode=theme_mode_for_setting(selected_theme); page.update()
     theme=ft.Dropdown(label='Theme', value=settings.get('theme','System'), options=[ft.dropdown.Option(x) for x in THEME_OPTIONS])
+    staging_dir_field=ft.TextField(label='Staging Directory', value=settings.get('staging_dir') or '', width=320)
     if hasattr(theme, 'on_select'):
         theme.on_select=apply_theme
     if hasattr(theme, 'on_change'):
@@ -1230,6 +1353,14 @@ def main(page: ft.Page):
         path = await maybe_await(picker.get_directory_path())
         if path:
             scan(path)
+    async def select_staging_directory(e):
+        picker=create_file_picker()
+        path = await maybe_await(picker.get_directory_path())
+        if path:
+            settings['staging_dir']=path; save_settings(settings); staging_dir_field.value=path; show_status(f'Staging directory set to {path}.'); page.update()
+    def save_staging_directory(e):
+        path=(staging_dir_field.value or '').strip()
+        settings['staging_dir']=path or None; save_settings(settings); show_status('Staging directory saved.' if path else 'Staging directory cleared.'); page.update()
     def scan(path=None):
         nonlocal books
         path=path or settings.get('working_directory')
@@ -1243,6 +1374,6 @@ def main(page: ft.Page):
         render()
     compact_db_button.on_click = compact_database_handler
     refresh_compact_database_button()
-    page.add(ft.Row([ft.Button('Select Working Directory', on_click=select_working_directory), ft.Button('Rescan', on_click=lambda _: scan()), compact_db_button, theme]), status, grid)
+    page.add(ft.Row([ft.Button('Select Working Directory', on_click=select_working_directory), ft.Button('Rescan', on_click=lambda _: scan()), ft.Button('Move to Staging', on_click=show_move_to_staging), compact_db_button, theme], wrap=True), ft.Row([staging_dir_field, ft.Button('Browse Staging', on_click=select_staging_directory), ft.Button('Save Staging', on_click=save_staging_directory)], wrap=True), status, grid)
     if settings.get('working_directory'): scan(settings['working_directory'])
 if __name__ == '__main__': ft.run(main)
