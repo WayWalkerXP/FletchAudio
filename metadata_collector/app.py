@@ -114,7 +114,7 @@ from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_m
 from .history import create_change_group, log_changes, metadata_diff, store_snapshot
 from .metadata_map import normalize_response
 from .maintenance import compact_database, database_path, format_bytes, get_database_size_display
-from .staging import candidates_from_books, move_to_staging, safe_move_to_staging, validate_staging_dir
+from .staging import discover_staging_candidates, move_to_staging, safe_move_to_staging, validate_staging_dir
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
 from .history_restore import changes_for_group_file, is_restore_supported, list_change_groups_for_file, restore_selected_metadata
 logging.basicConfig(level=logging.INFO)
@@ -1157,7 +1157,11 @@ def main(page: ft.Page):
         if not ok:
             show_warning('Staging directory unavailable', message)
             return
-        candidates=candidates_from_books(books)
+        working_directory=settings.get('working_directory')
+        if not working_directory:
+            show_warning('Working directory required', 'No working directory is selected. Please select a working directory before moving books to staging.')
+            return
+        candidates=discover_staging_candidates(Path(working_directory).expanduser())
         logging.info('Move to Staging candidate count: %s', len(candidates))
         selected_checks={}
         rows=[]
@@ -1219,7 +1223,7 @@ def main(page: ft.Page):
             modal=True,
             title=ft.Text('Move to Staging'),
             content=ft.Column(rows, scroll=ft.ScrollMode.AUTO, height=520, width=1030, spacing=0),
-            actions=[ft.TextButton('Cancel', on_click=lambda e: close_dialog(dialog)), ft.FilledButton('Move', disabled=not candidates, on_click=confirm_move)],
+            actions=[ft.TextButton('Cancel', on_click=lambda e: return_to_main_menu_after_staging(dialog)), ft.FilledButton('Move', disabled=not candidates, on_click=confirm_move)],
         )
         open_dialog(dialog)
 
