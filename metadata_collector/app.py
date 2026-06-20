@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import logging
+import uuid
 from pathlib import Path
 
 import flet as ft
@@ -114,13 +115,28 @@ from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_m
 from .history import create_change_group, log_changes, metadata_diff, store_snapshot
 from .metadata_map import normalize_response
 from .maintenance import compact_database, database_path, format_bytes, get_database_size_display
-from .staging import discover_staging_candidates, move_to_staging, safe_move_to_staging, validate_staging_dir
+from .staging import destination_for, discover_staging_candidates, move_to_staging, safe_move_to_staging, validate_staging_dir
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
 from .history_restore import changes_for_group_file, is_restore_supported, list_change_groups_for_file, restore_selected_metadata
 logging.basicConfig(level=logging.INFO)
 
+def log_page_state(page: ft.Page, label: str) -> None:
+    try:
+        logging.info(
+            "[PAGE STATE] %s | route=%r | views=%s | controls=%s | overlay=%s | dialog=%s",
+            label,
+            getattr(page, "route", None),
+            [getattr(view, "route", None) for view in getattr(page, "views", [])],
+            len(getattr(page, "controls", []) or []),
+            len(getattr(page, "overlay", []) or []),
+            type(getattr(page, "dialog", None)).__name__ if getattr(page, "dialog", None) else None,
+        )
+    except Exception:
+        logging.exception("Failed to log page state for %s", label)
+
 def main(page: ft.Page):
     engine=init_db(); Session=get_session_factory(engine); settings=load_settings(); books=[]
+    log_page_state(page, 'app startup before main window render')
     page.title='FletchAudio'; page.theme_mode=theme_mode_for_setting(settings.get('theme'))
     status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(content='Compact Database', on_click=None)
     if hasattr(page, 'services'):
@@ -129,6 +145,16 @@ def main(page: ft.Page):
         page.overlay.append(url_launcher)
     def show_status(message: str):
         status.value=message; page.update()
+    existing_route_handler=getattr(page, 'on_route_change', None)
+    if existing_route_handler:
+        def diagnostic_route_change(event):
+            log_page_state(page, 'before route-change handling')
+            result=existing_route_handler(event)
+            log_page_state(page, 'after route-change handling')
+            return result
+        page.on_route_change=diagnostic_route_change
+    else:
+        logging.info('No page.on_route_change handler installed; route-change diagnostics will rely on explicit navigation logs.')
     def compact_database_button_text() -> str:
         return f'Compact Database ({get_database_size_display(database_path(engine))})'
 
@@ -196,12 +222,14 @@ def main(page: ft.Page):
                     overlay.remove(control)
 
     def return_to_main_menu_after_staging(dialog=None):
+        log_page_state(page, 'before returning to main menu after staging')
         clear_dialog_state(dialog)
         if settings.get('working_directory'):
             scan()
         else:
             render()
         page.update()
+        log_page_state(page, 'after returning to main menu after staging')
 
     def open_progress_dialog(message):
         dialog=ft.AlertDialog(
@@ -1147,7 +1175,9 @@ def main(page: ft.Page):
         show_status(message)
 
     def show_move_to_staging(_=None):
-        logging.info('Opening Move to Staging screen')
+        move_screen_id=uuid.uuid4().hex[:8]
+        logging.info('Opening Move to Staging screen id=%s', move_screen_id)
+        log_page_state(page, f'before rendering Move to Staging screen id={move_screen_id}')
         staging_value=(settings.get('staging_dir') or '').strip()
         if not staging_value:
             show_warning('Staging directory required', 'No staging directory is configured. Please configure a staging directory in Settings before moving books to staging.')
@@ -1162,7 +1192,11 @@ def main(page: ft.Page):
             show_warning('Working directory required', 'No working directory is selected. Please select a working directory before moving books to staging.')
             return
         candidates=discover_staging_candidates(Path(working_directory).expanduser())
-        logging.info('Move to Staging candidate count: %s', len(candidates))
+        logging.info('Building Move to Staging screen id=%s candidates=%s', move_screen_id, len(candidates))
+        logging.info('Move to Staging candidate count id=%s: %s', move_screen_id, len(candidates))
+        logging.info('Move to Staging candidate source paths id=%s: %s', move_screen_id, [str(candidate.source_path) for candidate in candidates])
+        logging.info('Move to Staging candidate destinations id=%s: %s', move_screen_id, [str(destination_for(candidate, staging_dir)) for candidate in candidates])
+        logging.info('Move to Staging candidates id=%s are freshly discovered local variables; previous candidate list/view reused=False cached_view=False cached_controls=False', move_screen_id)
         selected_checks={}
         rows=[]
         divider_color=ft.Colors.OUTLINE_VARIANT
@@ -1196,17 +1230,29 @@ def main(page: ft.Page):
             rows.append(ft.Text('No books are ready for staging. Books must have both target_bitrate and target_channels defined before they can be moved.'))
 
         async def confirm_move(_):
+            logging.info('Move to Staging Move button clicked id=%s', move_screen_id)
+            log_page_state(page, f'before Move button handler id={move_screen_id}')
             selected=[candidate for candidate in candidates if selected_checks[candidate.source_path].value]
             if not selected:
                 show_status('No books selected for staging.')
                 return
+            logging.info('Move to Staging selected count id=%s: %s', move_screen_id, len(selected))
+            logging.info('Move to Staging selected source paths id=%s: %s', move_screen_id, [str(candidate.source_path) for candidate in selected])
+            logging.info('Move to Staging selected destination paths id=%s: %s', move_screen_id, [str(destination_for(candidate, staging_dir)) for candidate in selected])
             for candidate in selected:
-                logging.info('Selected staging item: %s', candidate.source_path)
+                logging.info('Selected staging item id=%s: %s', move_screen_id, candidate.source_path)
             message=f'{len(selected)} selected book(s) will be moved to:\n{staging_dir}\n\nFiles/folders will be moved out of the working directory.'
             async def run_mode(mode):
+                logging.info('Move to Staging mode selected id=%s mode=%s', move_screen_id, mode)
+                if mode == 'Safe Move':
+                    logging.info('Move to Staging Safe Move button clicked id=%s', move_screen_id)
+                else:
+                    logging.info('Move to Staging Move confirm button clicked id=%s', move_screen_id)
+                log_page_state(page, f'before staging async task UI update id={move_screen_id} mode={mode}')
                 close_dialog(confirm_dialog)
                 close_dialog(dialog)
-                await run_staging_move(selected, staging_dir, mode)
+                logging.info('Move to Staging async task scheduling run_staging_move id=%s mode=%s', move_screen_id, mode)
+                await run_staging_move(selected, staging_dir, mode, move_screen_id)
             confirm_dialog=ft.AlertDialog(
                 modal=True,
                 title=ft.Text('Confirm Move to Staging'),
@@ -1223,20 +1269,27 @@ def main(page: ft.Page):
             modal=True,
             title=ft.Text('Move to Staging'),
             content=ft.Column(rows, scroll=ft.ScrollMode.AUTO, height=520, width=1030, spacing=0),
-            actions=[ft.TextButton('Cancel', on_click=lambda e: return_to_main_menu_after_staging(dialog)), ft.FilledButton('Move', disabled=not candidates, on_click=confirm_move)],
+            # Keep Cancel returning through return_to_main_menu_after_staging(dialog); previous implementation was: ft.TextButton('Cancel', on_click=lambda e: return_to_main_menu_after_staging(dialog))
+            actions=[ft.TextButton('Cancel', on_click=lambda e: (logging.info('Move to Staging Cancel clicked id=%s', move_screen_id), log_page_state(page, f'before Move to Staging Cancel handler id={move_screen_id}'), return_to_main_menu_after_staging(dialog), log_page_state(page, f'after Move to Staging Cancel handler id={move_screen_id}'))[-1]), ft.FilledButton('Move', disabled=not candidates, on_click=confirm_move)],
         )
         open_dialog(dialog)
+        log_page_state(page, f'after rendering Move to Staging screen id={move_screen_id}')
 
-    async def run_staging_move(selected, staging_dir: Path, mode: str):
+    async def run_staging_move(selected, staging_dir: Path, mode: str, move_screen_id: str | None = None):
         ok, message=validate_staging_dir(staging_dir)
         if not ok:
             show_warning('Staging directory unavailable', message)
             return
-        logging.info('Starting Move to Staging mode=%s destination=%s selected=%s', mode, staging_dir, len(selected))
+        logging.info('Move to Staging async task starts id=%s mode=%s destination=%s selected=%s', move_screen_id, mode, staging_dir, len(selected))
+        logging.info('Starting Move to Staging id=%s mode=%s destination=%s selected=%s', move_screen_id, mode, staging_dir, len(selected))
+        logging.info('Move to Staging task selected source paths id=%s: %s', move_screen_id, [str(candidate.source_path) for candidate in selected])
+        logging.info('Move to Staging task selected destination paths id=%s: %s', move_screen_id, [str(destination_for(candidate, staging_dir)) for candidate in selected])
+        log_page_state(page, f'before staging progress dialog id={move_screen_id}')
         current_text=ft.Text('', selectable=True)
         counts_text=ft.Text('Completed: 0\nSkipped: 0\nFailed: 0')
         progress_dialog=ft.AlertDialog(modal=True, title=ft.Text('Moving to staging...'), content=ft.Column([ft.ProgressRing(), current_text, counts_text], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER))
         open_dialog(progress_dialog)
+        log_page_state(page, f'after staging progress dialog id={move_screen_id}')
         await asyncio.sleep(0.1)
         results=[]
         counts={'moved':0, 'skipped':0, 'failed':0}
@@ -1245,22 +1298,29 @@ def main(page: ft.Page):
             current_text.value=f'Moving {index} of {len(selected)}: {candidate.display_name}'
             counts_text.value=f'Completed: {counts["moved"]}\nSkipped: {counts["skipped"]}\nFailed: {counts["failed"]}'
             page.update()
+            log_page_state(page, f'before staging per-item UI update id={move_screen_id} index={index}')
             result=mover(candidate, staging_dir)
             results.append(result)
             counts[result.status]=counts.get(result.status, 0) + 1
             logging.info('Staging result: %s -> %s status=%s message=%s', result.source_path, result.destination_path, result.status, result.message)
             await asyncio.sleep(0)
+        logging.info('Move to Staging async task finishes id=%s mode=%s counts=%s', move_screen_id, mode, counts)
+        log_page_state(page, f'before closing staging progress dialog id={move_screen_id}')
         close_dialog(progress_dialog)
+        log_page_state(page, f'after closing staging progress dialog id={move_screen_id}')
         summary=f'Move to Staging Complete\n\nMoved: {counts["moved"]}\nSkipped: {counts["skipped"]}\nFailed: {counts["failed"]}\n\nDestination:\n{staging_dir}'
         details='\n'.join(result.message for result in results if result.status != 'moved')
         if details:
             summary=f'{summary}\n\nDetails:\n{details}'
-        logging.info('Move to Staging summary: %s', summary.replace('\n', ' | '))
-        summary_dialog=ft.AlertDialog(modal=True, title=ft.Text('Move to Staging Complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda e: return_to_main_menu_after_staging(summary_dialog))])
+        logging.info('Move to Staging summary id=%s: %s', move_screen_id, summary.replace('\n', ' | '))
+        log_page_state(page, f'before showing completion dialog id={move_screen_id}')
+        summary_dialog=ft.AlertDialog(modal=True, title=ft.Text('Move to Staging Complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda e: (logging.info('Move to Staging completion OK clicked id=%s', move_screen_id), log_page_state(page, f'before completion OK return to main menu id={move_screen_id}'), return_to_main_menu_after_staging(summary_dialog), log_page_state(page, f'after completion OK return to main menu id={move_screen_id}'))[-1])])
         open_dialog(summary_dialog)
+        log_page_state(page, f'after showing completion dialog id={move_screen_id}')
         show_status(f'Move to staging complete: moved {counts["moved"]}, skipped {counts["skipped"]}, failed {counts["failed"]}.')
 
     def render():
+        log_page_state(page, 'before rendering main menu')
         refresh_compact_database_button()
         grid.controls.clear()
 
@@ -1360,6 +1420,7 @@ def main(page: ft.Page):
                 )
             )
         page.update()
+        log_page_state(page, 'after rendering main menu')
 
     def compact_database_handler(_):
         show_status('Compacting database...')
@@ -1410,6 +1471,10 @@ def main(page: ft.Page):
         render()
     compact_db_button.on_click = compact_database_handler
     refresh_compact_database_button()
+    log_page_state(page, 'before app startup main window render')
     page.add(ft.Row([ft.Button('Select Working Directory', on_click=select_working_directory), ft.Button('Rescan', on_click=lambda _: scan()), ft.Button('Move to Staging', on_click=show_move_to_staging), compact_db_button, theme], wrap=True), ft.Row([staging_dir_field, ft.Button('Browse Staging', on_click=select_staging_directory), ft.Button('Save Staging', on_click=save_staging_directory)], wrap=True), status, grid)
-    if settings.get('working_directory'): scan(settings['working_directory'])
+    log_page_state(page, 'after app startup main window render')
+    if settings.get('working_directory'):
+        logging.info('App startup triggering initial scan for working_directory=%s', settings['working_directory'])
+        scan(settings['working_directory'])
 if __name__ == '__main__': ft.run(main)
