@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 
 import flet as ft
-from mutagen import File, MutagenError
+from mutagen import File
 
 IMAGE_CONTAIN_FIT = getattr(getattr(ft, 'ImageFit', None) or ft.BoxFit, 'CONTAIN')
 THEME_OPTIONS = ('System', 'Light', 'Dark')
@@ -36,7 +36,8 @@ def get_actual_bitrate(file_metadata_or_path) -> int | None:
         return None
     try:
         audio = File(str(path), easy=False)
-    except (MutagenError, OSError):
+    except Exception as exc:
+        logging.warning('Skipping actual bitrate read for %s: %s', path, exc, exc_info=True)
         return None
     bitrate = getattr(getattr(audio, 'info', None), 'bitrate', None) if audio else None
     if bitrate is None:
@@ -53,7 +54,8 @@ def get_actual_channels(file_metadata_or_path) -> int | None:
         return None
     try:
         audio = File(str(path), easy=False)
-    except (MutagenError, OSError):
+    except Exception as exc:
+        logging.warning('Skipping actual channel read for %s: %s', path, exc, exc_info=True)
         return None
     channels = getattr(getattr(audio, 'info', None), 'channels', None) if audio else None
     if channels is None:
@@ -222,6 +224,34 @@ def main(page: ft.Page):
                 if control in overlay:
                     overlay.remove(control)
 
+    def render_main_menu_error_state(message):
+        grid.controls.clear()
+        grid.controls.append(
+            ft.Container(
+                content=ft.Column([
+                    ft.Text('Main menu could not be fully refreshed.', weight=ft.FontWeight.BOLD),
+                    ft.Text(message, selectable=True),
+                    ft.Button('Retry Main Menu', on_click=lambda _: safe_refresh_main_menu()),
+                ], spacing=8),
+                padding=12,
+                margin=margin_only(bottom=10),
+                border_radius=8,
+                bgcolor=ft.Colors.ERROR_CONTAINER,
+            )
+        )
+        status.value='Main menu refresh failed; see log for details.'
+
+    def safe_refresh_main_menu():
+        try:
+            if settings.get('working_directory'):
+                scan()
+            else:
+                render()
+        except Exception as exc:
+            logging.exception('Failed to render main menu after staging')
+            render_main_menu_error_state(str(exc))
+            page.update()
+
     def return_to_main_menu_after_staging(dialog=None, move_screen_id=None):
         nonlocal active_move_to_staging_screen_id
         log_page_state(page, 'before returning to main menu after staging')
@@ -229,10 +259,14 @@ def main(page: ft.Page):
             logging.info('Retiring Move to Staging screen id=%s', move_screen_id)
             active_move_to_staging_screen_id=None
         clear_dialog_state(dialog)
-        if settings.get('working_directory'):
-            scan()
-        else:
-            render()
+        try:
+            if settings.get('working_directory'):
+                scan()
+            else:
+                render()
+        except Exception as exc:
+            logging.exception('Failed to render main menu after staging')
+            render_main_menu_error_state(str(exc))
         page.update()
         log_page_state(page, 'after returning to main menu after staging')
 
@@ -1484,12 +1518,17 @@ def main(page: ft.Page):
         path=path or settings.get('working_directory')
         if not path: status.value='No working directory selected.'; page.update(); return
         settings['working_directory']=path; save_settings(settings); status.value=f'Scanning {path}...'; page.update()
-        books, errors=scan_directory(path)
-        with Session() as s:
-            for b in books: store_snapshot(s,b,'scan')
-        status.value=f'Found {len(books)} books.' + (f' {len(errors)} scan warnings logged.' if errors else '')
-        for err in errors: logging.warning(err)
-        render()
+        try:
+            books, errors=scan_directory(path)
+            with Session() as s:
+                for b in books: store_snapshot(s,b,'scan')
+            status.value=f'Found {len(books)} books.' + (f' {len(errors)} scan warnings logged.' if errors else '')
+            for err in errors: logging.warning('Audio scan warning: %s', err)
+            render()
+        except Exception as exc:
+            logging.exception('Failed to scan and render main menu for %s', path)
+            render_main_menu_error_state(str(exc))
+            page.update()
     compact_db_button.on_click = compact_database_handler
     refresh_compact_database_button()
     log_page_state(page, 'before app startup main window render')
