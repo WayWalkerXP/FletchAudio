@@ -171,6 +171,29 @@ def main(page: ft.Page):
                 overlay.remove(dialog)
         page.update()
 
+    def clear_dialog_state(dialog=None):
+        if dialog:
+            dialog.open = False
+        active_dialog = getattr(page, 'dialog', None)
+        if active_dialog:
+            active_dialog.open = False
+        if hasattr(page, 'dialog'):
+            page.dialog = None
+        overlay = getattr(page, 'overlay', None)
+        if overlay is not None:
+            for control in list(overlay):
+                if hasattr(control, 'open'):
+                    control.open = False
+            overlay.clear()
+
+    def return_to_main_menu_after_staging(dialog=None):
+        clear_dialog_state(dialog)
+        go = getattr(page, 'go', None)
+        if go:
+            go('/')
+        scan()
+        page.update()
+
     def open_progress_dialog(message):
         dialog=ft.AlertDialog(
             modal=True,
@@ -1220,7 +1243,7 @@ def main(page: ft.Page):
         if details:
             summary=f'{summary}\n\nDetails:\n{details}'
         logging.info('Move to Staging summary: %s', summary.replace('\n', ' | '))
-        summary_dialog=ft.AlertDialog(modal=True, title=ft.Text('Move to Staging Complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda e: (close_dialog(summary_dialog), scan()))])
+        summary_dialog=ft.AlertDialog(modal=True, title=ft.Text('Move to Staging Complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=lambda e: return_to_main_menu_after_staging(summary_dialog))])
         open_dialog(summary_dialog)
         show_status(f'Move to staging complete: moved {counts["moved"]}, skipped {counts["skipped"]}, failed {counts["failed"]}.')
 
