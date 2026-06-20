@@ -44,6 +44,52 @@ class MassUpdateTrackRow:
 def _string_value(value) -> str:
     return '' if value is None else str(value)
 
+_TRACK_SEPARATORS = {' ', '-', '_', '.'}
+
+
+def track_sort_key(value: str) -> tuple[int, int | str]:
+    value = (value or '').strip()
+    try:
+        return (0, int(value))
+    except ValueError:
+        return (1, value.casefold())
+
+
+def format_track_number(track_number: int, width: int) -> str:
+    return f'{track_number:0{max(2, width)}d}'
+
+
+def guess_track_number_from_filename(filename: str) -> int | None:
+    base_name = os.path.basename(filename or '')
+    stem, extension = os.path.splitext(base_name)
+    if not stem and extension:
+        stem = base_name
+    candidate = stem
+    if candidate.startswith('['):
+        closing = candidate.find(']')
+        if closing > 1:
+            candidate = candidate[1:closing]
+        else:
+            return None
+    elif candidate.startswith('('):
+        closing = candidate.find(')')
+        if closing > 1:
+            candidate = candidate[1:closing]
+        else:
+            return None
+    else:
+        end = len(candidate)
+        for index, char in enumerate(candidate):
+            if char in _TRACK_SEPARATORS:
+                end = index
+                break
+        candidate = candidate[:end]
+    candidate = candidate.strip()
+    if not candidate.isdigit():
+        return None
+    track_number = int(candidate)
+    return track_number if track_number > 0 else None
+
 
 def discover_folder_book_tracks(folder_path) -> list[MassUpdateTrackRow]:
     folder = Path(folder_path).expanduser()

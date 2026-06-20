@@ -124,7 +124,7 @@ from .audio_scan import scan_directory
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
 from .history import create_change_group, log_changes, metadata_diff, store_snapshot
 from .metadata_map import normalize_response
-from .mass_update import discover_folder_book_tracks, save_track_title_rows
+from .mass_update import discover_folder_book_tracks, format_track_number, guess_track_number_from_filename, save_track_title_rows, track_sort_key
 from .maintenance import compact_database, database_path, format_bytes, get_database_size_display
 from .staging import destination_for, discover_staging_candidates, move_to_staging, safe_move_to_staging, validate_staging_dir
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
@@ -1288,6 +1288,14 @@ def main(page: ft.Page):
         def row_value(row, field):
             return getattr(row, field) or ''
 
+        def sorted_visible_rows():
+            reverse=sort_direction.value == 'descending'
+            if sort_field.value == 'track':
+                key=lambda row: track_sort_key(row.track)
+            else:
+                key=lambda row: row_value(row, sort_field.value).casefold()
+            return sorted(rows, key=key, reverse=reverse)
+
         def render_rows():
             table.controls.clear()
             table.controls.append(ft.Row([
@@ -1297,9 +1305,7 @@ def main(page: ft.Page):
                 cell(ft.Text('Title', weight=ft.FontWeight.BOLD), 360, column_border),
                 cell(ft.Text('Status', weight=ft.FontWeight.BOLD), 160, column_border),
             ], spacing=0))
-            reverse=sort_direction.value == 'descending'
-            sorted_rows=sorted(rows, key=lambda row: row_value(row, sort_field.value).casefold(), reverse=reverse)
-            for row in sorted_rows:
+            for row in sorted_visible_rows():
                 checkbox=ft.Checkbox(value=row.selected)
                 track_field=ft.TextField(value=row.track, width=112, dense=True)
                 title_field=ft.TextField(value=row.title, width=342, dense=True)
@@ -1335,6 +1341,107 @@ def main(page: ft.Page):
         def future_placeholder(action):
             logging.info('Mass Update future action clicked id=%s action=%s', mass_update_screen_id, action)
             dialog=ft.AlertDialog(modal=True, title=ft.Text(action), content=ft.Text('This action will be implemented in a later FA-0003 phase.'), actions=[ft.TextButton('OK', on_click=lambda e: close_dialog(dialog))])
+            open_dialog(dialog)
+
+        def selected_rows_in_visible_order():
+            return [row for row in sorted_visible_rows() if row.selected]
+
+        def guess_tracks_clicked(e):
+            selected_rows=selected_rows_in_visible_order()
+            logging.info('Guess Tracks clicked id=%s selected_rows=%s', mass_update_screen_id, len(selected_rows))
+            guesses=[]
+            failed=0
+            for row in selected_rows:
+                guessed=guess_track_number_from_filename(row.filename)
+                if guessed is None:
+                    failed += 1
+                    logging.info('Guess Tracks parse failed id=%s file=%s', mass_update_screen_id, row.filename)
+                    continue
+                logging.info('Guess Tracks parse success id=%s file=%s track=%s', mass_update_screen_id, row.filename, guessed)
+                guesses.append((row, guessed))
+            width=max(2, len(str(max((guess for _, guess in guesses), default=0))))
+            logging.info('Guess Tracks padding width id=%s width=%s', mass_update_screen_id, width)
+            updated=0
+            unchanged=0
+            for row, guessed in guesses:
+                new_track=format_track_number(guessed, width)
+                if row.track == new_track:
+                    unchanged += 1
+                else:
+                    row.track=new_track
+                    updated += 1
+            logging.info('Guess Tracks rows updated id=%s updated=%s unchanged=%s failed=%s', mass_update_screen_id, updated, unchanged, failed)
+            if updated:
+                mark_unsaved('guess tracks')
+                render_rows()
+            dialog=ft.AlertDialog(modal=True, title=ft.Text('Guess Tracks Complete'), content=ft.Text(f'Updated: {updated}\nUnchanged: {unchanged}\nFailed: {failed}', selectable=True), actions=[ft.TextButton('OK', on_click=lambda ev: close_dialog(dialog))])
+            open_dialog(dialog)
+
+        def auto_track_clicked(e):
+            selected_rows=selected_rows_in_visible_order()
+            logging.info('Auto-Track opened id=%s selected_rows=%s', mass_update_screen_id, len(selected_rows))
+            starting_field=ft.TextField(label='Starting Track Number', value='1', width=220, dense=True)
+            error_text=ft.Text('', color=ft.Colors.RED)
+            dialog_dirty={'value': False}
+            track_fields=[]
+            def dialog_changed(_):
+                dialog_dirty['value']=True
+            for row in selected_rows:
+                field=ft.TextField(value=row.track, width=112, dense=True, on_change=dialog_changed)
+                track_fields.append((row, field))
+            starting_field.on_change=dialog_changed
+            list_rows=[ft.Row([ft.Text('Filename', weight=ft.FontWeight.BOLD, width=360), ft.Text('Track', weight=ft.FontWeight.BOLD, width=130)])]
+            for row, field in track_fields:
+                list_rows.append(ft.Row([ft.Text(row.filename, selectable=True, width=360, no_wrap=False), field], vertical_alignment=ft.CrossAxisAlignment.START))
+            def parse_starting():
+                raw=(starting_field.value or '').strip() or '1'
+                try:
+                    starting=int(raw)
+                except ValueError:
+                    return None
+                return starting if starting >= 1 else None
+            def apply_dialog_values(_):
+                logging.info('Auto-Track Apply clicked id=%s', mass_update_screen_id)
+                starting=parse_starting()
+                logging.info('Auto-Track starting number id=%s value=%s', mass_update_screen_id, starting_field.value)
+                if starting is None:
+                    error_text.value='Starting Track Number must be an integer greater than or equal to 1.'
+                    page.update()
+                    return
+                highest=starting + len(track_fields) - 1
+                width=max(2, len(str(highest)))
+                for index, (_, field) in enumerate(track_fields):
+                    field.value=format_track_number(starting + index, width)
+                dialog_dirty['value']=True
+                error_text.value=''
+                logging.info('Auto-Track rows updated in dialog id=%s rows=%s width=%s', mass_update_screen_id, len(track_fields), width)
+                page.update()
+            def save_dialog_values(_):
+                logging.info('Auto-Track Save clicked id=%s', mass_update_screen_id)
+                updated=0
+                for row, field in track_fields:
+                    new_track=field.value or ''
+                    if row.track != new_track:
+                        row.track=new_track
+                        updated += 1
+                close_dialog(dialog)
+                if updated:
+                    mark_unsaved('auto-track')
+                    render_rows()
+                logging.info('Auto-Track rows updated id=%s updated=%s', mass_update_screen_id, updated)
+            def close_after_discard(_):
+                logging.info('Auto-Track discard confirmed id=%s', mass_update_screen_id)
+                close_dialog(confirm_dialog)
+                close_dialog(dialog)
+            def cancel_dialog_values(_):
+                logging.info('Auto-Track Cancel clicked id=%s dirty=%s', mass_update_screen_id, dialog_dirty['value'])
+                if not dialog_dirty['value']:
+                    close_dialog(dialog)
+                    return
+                confirm_dialog=ft.AlertDialog(modal=True, title=ft.Text('Discard Auto-Track changes?'), content=ft.Text('You have unsaved Auto-Track changes.'), actions=[ft.TextButton('Stay', on_click=lambda ev: close_dialog(confirm_dialog)), ft.FilledButton('Discard', on_click=close_after_discard)])
+                open_dialog(confirm_dialog)
+            content=ft.Column([starting_field, error_text, ft.Container(content=ft.Column(list_rows, scroll=ft.ScrollMode.AUTO), width=520, height=360)], tight=True, spacing=10)
+            dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Track'), content=content, actions=[ft.TextButton('Cancel', on_click=cancel_dialog_values), ft.Button('Apply', on_click=apply_dialog_values), ft.FilledButton('Save', on_click=save_dialog_values)])
             open_dialog(dialog)
 
         def return_to_main():
@@ -1383,8 +1490,8 @@ def main(page: ft.Page):
             page.run_task(save_clicked, e, True) if hasattr(page, 'run_task') else asyncio.create_task(save_clicked(e, True))
 
         action_buttons=ft.Row([
-            ft.Button('Guess Tracks', on_click=lambda e: future_placeholder('Guess Tracks')),
-            ft.Button('Auto-Track', on_click=lambda e: future_placeholder('Auto-Track')),
+            ft.Button('Guess Tracks', on_click=guess_tracks_clicked),
+            ft.Button('Auto-Track', on_click=auto_track_clicked),
             ft.Button('Auto-Title', on_click=lambda e: future_placeholder('Auto-Title')),
             ft.Button('Set Title', on_click=lambda e: future_placeholder('Set Title')),
             ft.TextButton('Cancel', on_click=cancel_clicked),
