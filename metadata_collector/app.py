@@ -1263,7 +1263,6 @@ def main(page: ft.Page):
         sort_field=ft.Dropdown(label='Sort by', value='filename', width=180, options=[ft.dropdown.Option('filename', 'Filename'), ft.dropdown.Option('track', 'Track'), ft.dropdown.Option('title', 'Title')])
         sort_direction=ft.Dropdown(label='Direction', value='ascending', width=170, options=[ft.dropdown.Option('ascending', 'Ascending'), ft.dropdown.Option('descending', 'Descending')])
         table=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=0)
-        table_scroll_container_height=520
         action_footer_height=72
         unsaved={'value': False}
         title_text=ft.Text('Mass Update', size=24, weight=ft.FontWeight.BOLD)
@@ -1393,7 +1392,10 @@ def main(page: ft.Page):
             ft.FilledButton('Save & Exit', on_click=save_exit_button_handler),
         ], spacing=8, wrap=True)
         mass_update_content=ft.Column([
-            ft.Container(content=table, height=table_scroll_container_height, width=1090),
+            title_text,
+            ft.Text(f'Folder: {folder_path}', selectable=True),
+            ft.Row([sort_field, sort_direction, unsaved_text], spacing=12, wrap=True),
+            ft.Container(content=table, expand=True, width=1090),
             ft.Container(
                 content=action_buttons,
                 height=action_footer_height,
@@ -1402,15 +1404,9 @@ def main(page: ft.Page):
                 padding=padding_only(top=12),
                 border=ft.Border(top=ft.BorderSide(1, divider_color)),
             ),
-        ], spacing=0)
+        ], expand=True, spacing=8)
 
-        replace_page_controls(
-            title_text,
-            ft.Text(f'Folder: {folder_path}', selectable=True),
-            ft.Row([sort_field, sort_direction, unsaved_text], spacing=12, wrap=True),
-            mass_update_content,
-            status,
-        )
+        replace_page_controls(mass_update_content)
         render_rows()
         log_page_state(page, f'after rendering Mass Update screen id={mass_update_screen_id}')
 
