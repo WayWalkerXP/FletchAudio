@@ -157,11 +157,8 @@ def main(page: ft.Page):
         close_control = getattr(page, 'close', None)
         if close_control and dialog:
             close_control(dialog)
-            return
-        pop_dialog = getattr(page, 'pop_dialog', None)
-        if pop_dialog:
-            pop_dialog()
-            return
+        elif getattr(page, 'pop_dialog', None):
+            page.pop_dialog()
         if dialog:
             dialog.open = False
             if getattr(page, 'dialog', None) is dialog:
@@ -172,19 +169,35 @@ def main(page: ft.Page):
         page.update()
 
     def clear_dialog_state(dialog=None):
+        close_control = getattr(page, 'close', None)
+        dialogs_to_close = []
         if dialog:
             dialog.open = False
+            dialogs_to_close.append(dialog)
         active_dialog = getattr(page, 'dialog', None)
-        if active_dialog:
-            active_dialog.open = False
+        if active_dialog and active_dialog not in dialogs_to_close:
+            dialogs_to_close.append(active_dialog)
+        overlay = getattr(page, 'overlay', None)
+        if overlay is not None:
+            dialogs_to_close.extend(
+                control for control in list(overlay)
+                if isinstance(control, ft.AlertDialog) and control not in dialogs_to_close
+            )
+        for control in dialogs_to_close:
+            if control is not dialog:
+                control.open = False
+            if close_control:
+                close_control(control)
         if hasattr(page, 'dialog'):
             page.dialog = None
-        overlay = getattr(page, 'overlay', None)
         if overlay is not None:
             for control in list(overlay):
                 if hasattr(control, 'open'):
                     control.open = False
             overlay.clear()
+        views = getattr(page, 'views', None)
+        if views is not None:
+            views.clear()
 
     def return_to_main_menu_after_staging(dialog=None):
         clear_dialog_state(dialog)
