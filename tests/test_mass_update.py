@@ -120,6 +120,26 @@ def test_guess_title_from_filename_supported_prefixes():
     assert {name: guess_title_from_filename(name) for name in examples} == examples
 
 
+
+def test_guess_title_from_filename_strips_book_title_prefix_before_chapter_marker():
+    examples = {
+        'Imperial Summoner Mage Academy 2 - 01 - Opening Credits.mp3': '01 - Opening Credits',
+        'Some Book Title - Chapter 4.mp3': 'Chapter 4',
+        'Some Book Title - Book 2 Chapter 10.mp3': 'Book 2, Chapter 10',
+        'Some Book Title - Part 3.mp3': 'Part 3',
+    }
+    assert {name: guess_title_from_filename(name) for name in examples} == examples
+
+
+def test_guess_title_from_filename_normalizes_book_chapter_titles():
+    assert guess_title_from_filename('A Tale of Two Cities - Book 2 Chapter 10.mp3') == 'Book 2, Chapter 10'
+    assert guess_title_from_filename('Book 2 Chapter 10.mp3') == 'Book 2, Chapter 10'
+
+
+def test_guess_title_from_filename_preserves_existing_non_chapter_prefix_behavior():
+    assert guess_title_from_filename('The Tomb of Hercules 03.mp3') == 'The Tomb of Hercules 03'
+    assert guess_title_from_filename('CD 04 - The Hunt For Atlantis.mp3') == 'CD 04 - The Hunt For Atlantis'
+
 def test_guess_title_from_filename_uses_stem_for_non_numeric_and_ignores_path():
     assert guess_title_from_filename('/tmp/books/Prologue.mp3') == 'Prologue'
     assert guess_title_from_filename('/tmp/books/Chapter One.m4b') == 'Chapter One'
