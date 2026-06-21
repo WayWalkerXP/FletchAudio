@@ -158,7 +158,7 @@ def main(page: ft.Page):
     engine=init_db(); Session=get_session_factory(engine); settings=load_settings(); books=[]
     log_page_state(page, 'app startup before main window render')
     page.title='FletchAudio'; page.theme_mode=theme_mode_for_setting(settings.get('theme'))
-    status=ft.Text('Select a working directory to begin.'); book_list_header=ft.Container(); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); duplicate_statuses={}; url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(content='Compact Database', on_click=None)
+    status=ft.Text('Select a working directory to begin.'); search_field=ft.TextField(label='Search books', hint_text='Search name, album, author, narrator, series, ASIN...', expand=True); filter_dropdown=ft.Dropdown(label='Filter', value='All Books', width=220, options=[ft.dropdown.Option(option) for option in ('All Books', 'Folder Books', 'Single File Books', 'Missing Targets', 'Duplicate Books')]); clear_search_button=ft.Button('Clear Search'); book_list_header=ft.Container(); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); duplicate_statuses={}; url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(content='Compact Database', on_click=None)
     active_move_to_staging_screen_id=None
     current_screen='main'
     if hasattr(page, 'services'):
@@ -238,8 +238,18 @@ def main(page: ft.Page):
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         )
+        search_controls = ft.Row(
+            [
+                search_field,
+                filter_dropdown,
+                clear_search_button,
+            ],
+            spacing=10,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
         return [
             toolbar,
+            search_controls,
             status,
             book_list_header,
             grid,
@@ -2244,6 +2254,77 @@ def main(page: ft.Page):
         else:
             show_status(f'Duplicate check complete: {counts["duplicates"]} duplicate(s), {counts["no_duplicates"]} no duplicate(s), {counts["errors"]} error(s).')
 
+    def current_book_filter():
+        return filter_dropdown.value or 'All Books'
+
+    def normalized_search_text():
+        return (search_field.value or '').strip().casefold()
+
+    def book_has_missing_targets(book):
+        return target_settings_status(book) == 'red'
+
+    def book_is_marked_duplicate(book):
+        duplicate_status = duplicate_statuses.get(book.key)
+        return bool(duplicate_status and duplicate_status.status == 'duplicate')
+
+    def book_matches_filter(book):
+        selected_filter=current_book_filter()
+        if selected_filter == 'Folder Books':
+            return book.is_folder_book
+        if selected_filter == 'Single File Books':
+            return not book.is_folder_book
+        if selected_filter == 'Missing Targets':
+            return book_has_missing_targets(book)
+        if selected_filter == 'Duplicate Books':
+            return book_is_marked_duplicate(book)
+        return True
+
+    def searchable_book_values(book):
+        first=book.files[0] if book.files else None
+        series=' '.join(part for part in [getattr(first, 'series', None), getattr(first, 'series_sequence', None)] if part) if first else ''
+        return [
+            book.display_name,
+            getattr(first, 'album', None),
+            getattr(first, 'title', None),
+            getattr(first, 'author', None),
+            getattr(first, 'narrator', None),
+            series,
+            getattr(first, 'asin', None),
+        ]
+
+    def book_matches_search(book, search_text):
+        if not search_text:
+            return True
+        return any(search_text in str(value or '').casefold() for value in searchable_book_values(book))
+
+    def filtered_books():
+        search_text=normalized_search_text()
+        filter_matches=[book for book in books if book_matches_filter(book)]
+        return [book for book in filter_matches if book_matches_search(book, search_text)]
+
+    def search_or_filter_active():
+        return current_book_filter() != 'All Books' or bool(normalized_search_text())
+
+    def update_result_status(rendered_count):
+        total_count=len(books)
+        if not search_or_filter_active():
+            status.value=f'Found {total_count} book' + ('' if total_count == 1 else 's') + '.'
+        elif rendered_count == 0:
+            status.value='No books match the current search/filter.'
+        else:
+            status.value=f'Showing {rendered_count} of {total_count} book' + ('' if total_count == 1 else 's') + '.'
+
+    def handle_search_or_filter_change(_=None):
+        render()
+
+    def clear_book_search(_=None):
+        search_field.value=''
+        render()
+
+    search_field.on_change=handle_search_or_filter_change
+    attach_dropdown_selection_handler(filter_dropdown, handle_search_or_filter_change)
+    clear_search_button.on_click=clear_book_search
+
     def render():
         nonlocal current_screen
         current_screen='main'
@@ -2373,7 +2454,10 @@ def main(page: ft.Page):
                 padding=padding_only(left=56, right=12, top=6, bottom=6),
             )
 
-        for b in books:
+        rendered_books=filtered_books()
+        update_result_status(len(rendered_books))
+
+        for b in rendered_books:
             first=b.files[0]
             card_content=ft.Column([
                 book_top_row(b, first),

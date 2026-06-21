@@ -15,17 +15,45 @@ def test_book_card_primary_metadata_uses_album_not_title():
     assert 'text_cell(first.title, expand=4)' not in source
 
 
-def test_main_menu_places_static_header_between_status_and_scrollable_grid():
+def test_main_menu_places_search_filter_controls_above_status_and_grid():
     source = APP_SOURCE
 
-    assert "status=ft.Text('Select a working directory to begin.'); book_list_header=ft.Container(); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True)" in source
+    assert "search_field=ft.TextField(label='Search books'" in source
+    assert "filter_dropdown=ft.Dropdown(label='Filter', value='All Books'" in source
+    assert "clear_search_button=ft.Button('Clear Search')" in source
     assert """        return [
             toolbar,
+            search_controls,
             status,
             book_list_header,
             grid,
         ]
 """ in source
+
+
+def test_main_filter_dropdown_has_required_options():
+    source = APP_SOURCE
+
+    assert "('All Books', 'Folder Books', 'Single File Books', 'Missing Targets', 'Duplicate Books')" in source
+    assert "attach_dropdown_selection_handler(filter_dropdown, handle_search_or_filter_change)" in source
+
+
+def test_main_search_filter_helpers_use_required_fields_and_statuses():
+    source = APP_SOURCE
+
+    for expected in [
+        "return (search_field.value or '').strip().casefold()",
+        "return target_settings_status(book) == 'red'",
+        "duplicate_status.status == 'duplicate'",
+        "getattr(first, 'album', None)",
+        "getattr(first, 'title', None)",
+        "getattr(first, 'author', None)",
+        "getattr(first, 'narrator', None)",
+        "getattr(first, 'asin', None)",
+        "rendered_books=filtered_books()",
+        "for b in rendered_books:",
+    ]:
+        assert expected in source
 
 
 def test_static_header_matches_top_level_book_card_columns():
