@@ -2272,6 +2272,9 @@ def main(page: ft.Page):
                 alignment=ft.Alignment(-1, 0),
             )
 
+        def book_list_header_spacer(*, width):
+            return ft.Container(width=width, padding=padding_symmetric(horizontal=4))
+
         def build_book_list_header():
             return ft.Container(
                 content=ft.Row([
@@ -2284,7 +2287,7 @@ def main(page: ft.Page):
                     book_list_header_cell('ASIN', width=110),
                     book_list_header_cell('Duplicate', width=126),
                     book_list_header_cell('Tracks', width=92),
-                    book_list_header_cell('Expand', width=42),
+                    book_list_header_spacer(width=42),
                 ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 padding=padding_only(left=12, right=12, top=8, bottom=8),
                 border_radius=8,
