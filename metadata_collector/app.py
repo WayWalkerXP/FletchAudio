@@ -25,6 +25,7 @@ TARGET_STATUS_COLORS = {
     'red': ft.Colors.RED,
     'yellow': ft.Colors.AMBER,
 }
+BOOK_LIST_SCROLLBAR_GAP = 12
 
 RUNTIME_RESULT_ROW_COLORS = {
     'green': ft.Colors.with_opacity(0.18, ft.Colors.GREEN),
@@ -158,7 +159,7 @@ def main(page: ft.Page):
     engine=init_db(); Session=get_session_factory(engine); settings=load_settings(); books=[]
     log_page_state(page, 'app startup before main window render')
     page.title='FletchAudio'; page.theme_mode=theme_mode_for_setting(settings.get('theme'))
-    status=ft.Text('Select a working directory to begin.'); search_field=ft.TextField(label='Search books', hint_text='Search name, album, author, narrator, series, ASIN...', expand=True); filter_dropdown=ft.Dropdown(label='Filter', value='All Books', width=220, options=[ft.dropdown.Option(option) for option in ('All Books', 'Folder Books', 'Single File Books', 'Missing Targets', 'Duplicate Books')]); clear_search_button=ft.Button('Clear Search'); book_list_header=ft.Container(); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); duplicate_statuses={}; current_search_text=''; search_debounce_task=None; url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(content='Compact Database', on_click=None)
+    status=ft.Text('Select a working directory to begin.'); search_field=ft.TextField(label='Search books', hint_text='Search name, album, author, narrator, series, ASIN...', expand=True); filter_dropdown=ft.Dropdown(label='Filter', value='All Books', width=220, options=[ft.dropdown.Option(option) for option in ('All Books', 'Folder Books', 'Single File Books', 'Missing Targets', 'Duplicate Books')]); clear_search_button=ft.Button('Clear Search'); book_list_header=ft.Container(margin=margin_only(right=BOOK_LIST_SCROLLBAR_GAP)); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); duplicate_statuses={}; current_search_text=''; search_debounce_task=None; url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(content='Compact Database', on_click=None)
     active_move_to_staging_screen_id=None
     current_screen='main'
     if hasattr(page, 'services'):
@@ -2493,7 +2494,7 @@ def main(page: ft.Page):
                 ft.Container(
                     content=card_content,
                     padding=12,
-                    margin=margin_only(bottom=10),
+                    margin=margin_only(bottom=10, right=BOOK_LIST_SCROLLBAR_GAP),
                     border_radius=8,
                     bgcolor=ft.Colors.with_opacity(0.34, ft.Colors.AMBER_900) if duplicate_statuses.get(b.key) and duplicate_statuses[b.key].status == 'duplicate' else ft.Colors.SURFACE_CONTAINER_HIGHEST,
                 )
