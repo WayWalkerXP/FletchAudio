@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import re
+from datetime import datetime, timedelta
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag
 from .models import BookSnapshot, ChangeGroup, MetadataChange
 from .utils import json_dumps, stringify
@@ -160,3 +161,21 @@ def cleanup_cover_bloat(session):
             changed['changes'] += 1
     session.commit()
     return changed
+
+
+def cleanup_metadata_history(session, days_to_keep=3):
+    try:
+        days = int(days_to_keep)
+    except (TypeError, ValueError):
+        days = 3
+    cutoff = datetime.utcnow() - timedelta(days=max(days, 0))
+    deleted = {'snapshots': 0, 'changes': 0, 'change_groups': 0}
+    deleted['snapshots'] = session.query(BookSnapshot).filter(BookSnapshot.created_at < cutoff).delete(synchronize_session=False)
+    deleted['changes'] = session.query(MetadataChange).filter(MetadataChange.changed_at < cutoff).delete(synchronize_session=False)
+    for group in session.query(ChangeGroup).filter(ChangeGroup.created_at < cutoff).all():
+        remaining = session.query(MetadataChange).filter_by(change_group_id=group.id).count()
+        if remaining == 0:
+            session.delete(group)
+            deleted['change_groups'] += 1
+    session.commit()
+    return deleted

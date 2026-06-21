@@ -125,7 +125,7 @@ from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_m
 from .history import create_change_group, log_changes, metadata_diff, store_snapshot
 from .metadata_map import normalize_response
 from .mass_update import apply_track_offset, changed_track_title_rows, discover_folder_book_tracks, format_track_number, guess_track_number_from_filename, guess_title_from_filename, parse_track_offset, render_title_template, save_track_title_rows, track_sort_key, validate_title_template
-from .maintenance import compact_database, database_path, format_bytes, get_database_size_display
+from .maintenance import clear_metadata_history, compact_database, database_path, format_bytes, get_database_size_display
 from .staging import destination_for, discover_staging_candidates, move_to_staging, safe_move_to_staging, validate_staging_dir
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
 from .history_restore import changes_for_group_file, is_restore_supported, list_change_groups_for_file, restore_selected_metadata
@@ -177,9 +177,7 @@ def main(page: ft.Page):
 
     def build_main_menu_controls():
         return [
-            ft.Row([ft.Button('Select Working Directory', on_click=select_working_directory), ft.Button('Rescan', on_click=lambda _: scan()), ft.Button('Check for Duplicates', on_click=check_for_duplicates), ft.Button('Move to Staging', on_click=show_move_to_staging), compact_db_button, theme], wrap=True),
-            ft.Row([staging_dir_field, ft.Button('Browse Staging', on_click=select_staging_directory), ft.Button('Save Staging', on_click=save_staging_directory)], wrap=True),
-            ft.Row([abs_url_field, abs_api_key_field, ft.Button('Save ABS Settings', on_click=save_abs_settings)], wrap=True),
+            ft.Row([ft.Button('Settings', on_click=lambda _: show_settings()), ft.Button('Rescan', on_click=lambda _: scan()), ft.Button('Check for Duplicates', on_click=check_for_duplicates), ft.Button('Move to Staging', on_click=show_move_to_staging)], wrap=True),
             status,
             grid,
         ]
@@ -2303,6 +2301,173 @@ def main(page: ft.Page):
             )
         page.update()
         log_page_state(page, 'after rendering main menu')
+
+    def show_settings(section='Directories'):
+        nonlocal current_screen
+        current_screen='settings'
+        page.route='/settings'
+        active={'section': section}
+        sections=('Directories', 'API Settings', 'Appearance', 'Danger Zone')
+        fields={}
+        danger_days_saved={'value': '3'}
+        content=ft.Column(expand=True, scroll=ft.ScrollMode.AUTO, spacing=12)
+        nav=ft.Column(width=180, spacing=8)
+
+        def saved(section_name):
+            return {
+                'Directories': {
+                    'working_directory': settings.get('working_directory') or '',
+                    'staging_dir': settings.get('staging_dir') or '',
+                },
+                'API Settings': {
+                    'abs_url': settings.get('abs_url') or '',
+                    'abs_api_key': settings.get('abs_api_key') or '',
+                },
+                'Appearance': {'theme': settings.get('theme', 'System')},
+                'Danger Zone': {'days_to_keep': danger_days_saved['value']},
+            }[section_name]
+
+        staged={name: saved(name) for name in sections}
+
+        def section_dirty(section_name):
+            return staged[section_name] != saved(section_name)
+
+        def set_field(key, value):
+            staged[active['section']][key] = value or ''
+
+        def save_section(section_name):
+            values=staged[section_name]
+            if section_name == 'Directories':
+                settings['working_directory']=values['working_directory'].strip() or None
+                settings['staging_dir']=values['staging_dir'].strip() or None
+            elif section_name == 'API Settings':
+                settings['abs_url']=values['abs_url'].strip() or None
+                settings['abs_api_key']=values['abs_api_key'].strip() or None
+            elif section_name == 'Appearance':
+                settings['theme']=values['theme'] or 'System'
+                page.theme_mode=theme_mode_for_setting(settings['theme'])
+            elif section_name == 'Danger Zone':
+                danger_days_saved['value']=values.get('days_to_keep') or '3'
+            if section_name != 'Danger Zone':
+                save_settings(settings)
+            staged[section_name]=saved(section_name)
+            show_status(f'{section_name} settings saved.')
+
+        def refresh_nav():
+            nav.controls.clear()
+            nav.controls.append(ft.Text('Settings', size=22, weight=ft.FontWeight.BOLD))
+            nav.controls.append(ft.Button('Back to Main', on_click=lambda e: request_navigation(None)))
+            for name in sections:
+                label=f'{name} *' if section_dirty(name) else name
+                nav.controls.append(ft.FilledButton(label, on_click=lambda e, name=name: request_navigation(name)) if name == active['section'] else ft.Button(label, on_click=lambda e, name=name: request_navigation(name)))
+
+        def render_section():
+            content.controls.clear()
+            refresh_nav()
+            name=active['section']
+            content.controls.append(ft.Text(name, size=24, weight=ft.FontWeight.BOLD))
+            if name == 'Directories':
+                working=ft.TextField(label='Working Directory', value=staged[name]['working_directory'], width=520, on_change=lambda e: set_field('working_directory', e.control.value))
+                staging=ft.TextField(label='Staging Directory', value=staged[name]['staging_dir'], width=520, on_change=lambda e: set_field('staging_dir', e.control.value))
+                fields['working_directory']=working; fields['staging_dir']=staging
+                async def browse_working(e):
+                    picker=create_file_picker()
+                    path=await maybe_await(picker.get_directory_path())
+                    if path:
+                        working.value=path; set_field('working_directory', path); page.update()
+                async def browse_staging(e):
+                    picker=create_file_picker()
+                    path=await maybe_await(picker.get_directory_path())
+                    if path:
+                        staging.value=path; set_field('staging_dir', path); page.update()
+                content.controls.extend([
+                    ft.Row([working, ft.Button('Browse', on_click=browse_working)], wrap=True),
+                    ft.Row([staging, ft.Button('Browse', on_click=browse_staging)], wrap=True),
+                    ft.TextField(label='Library Directory', value='Reserved for future library move/import features', read_only=True, width=520),
+                    ft.Row([ft.FilledButton('Save Directories', on_click=lambda e: (save_section(name), render_section(), page.update())), ft.Button('Cancel/Clear', on_click=lambda e: (staged.__setitem__(name, saved(name)), render_section(), page.update()))]),
+                ])
+            elif name == 'API Settings':
+                content.controls.extend([
+                    ft.TextField(label='ABS Base URL', value=staged[name]['abs_url'], width=520, on_change=lambda e: set_field('abs_url', e.control.value)),
+                    ft.TextField(label='ABS API Key', value=staged[name]['abs_api_key'], password=True, can_reveal_password=False, width=520, on_change=lambda e: set_field('abs_api_key', e.control.value)),
+                    ft.Row([ft.FilledButton('Save API Settings', on_click=lambda e: (save_section(name), render_section(), page.update())), ft.Button('Cancel/Clear', on_click=lambda e: (staged.__setitem__(name, saved(name)), render_section(), page.update()))]),
+                ])
+            elif name == 'Appearance':
+                mode=ft.Dropdown(label='Mode', value=staged[name]['theme'], options=[ft.dropdown.Option(x) for x in THEME_OPTIONS], on_change=lambda e: set_field('theme', e.control.value))
+                if hasattr(mode, 'on_select'):
+                    mode.on_select=lambda e: set_field('theme', e.control.value)
+                content.controls.extend([mode, ft.Row([ft.FilledButton('Save Appearance', on_click=lambda e: (save_section(name), render_section(), page.update())), ft.Button('Cancel/Clear', on_click=lambda e: (staged.__setitem__(name, saved(name)), render_section(), page.update()))])])
+            else:
+                days=ft.Dropdown(label='Days of Metadata to Keep', value=staged[name]['days_to_keep'], options=[ft.dropdown.Option(x) for x in ('0','3','7','14','30')], on_change=lambda e: set_field('days_to_keep', e.control.value))
+                box=ft.Container(
+                    content=ft.Column([
+                        ft.Text('Clear Historical Metadata / Clear Metadata from Database', weight=ft.FontWeight.BOLD, color=ft.Colors.RED),
+                        ft.Text('Deletes metadata snapshots and change history only. Settings and app configuration are preserved.'),
+                        days,
+                        ft.Row([ft.FilledButton('Proceed', bgcolor=ft.Colors.RED, color=ft.Colors.WHITE, on_click=lambda e: confirm_clear_history()), ft.Button('Cancel/Clear', on_click=lambda e: (staged.__setitem__(name, saved(name)), render_section(), page.update()))]),
+                    ]),
+                    border=ft.border.all(1, ft.Colors.RED),
+                    border_radius=8,
+                    padding=12,
+                )
+                content.controls.append(box)
+            refresh_nav()
+
+        def navigate_to(destination):
+            if destination is None:
+                render()
+                return
+            active['section']=destination
+            render_section()
+            page.update()
+
+        def request_navigation(destination):
+            current=active['section']
+            if not section_dirty(current):
+                navigate_to(destination)
+                return
+            def go_back(e):
+                close_dialog(dialog)
+            def ignore(e):
+                staged[current]=saved(current)
+                close_dialog(dialog)
+                navigate_to(destination)
+            def save(e):
+                save_section(current)
+                close_dialog(dialog)
+                navigate_to(destination)
+            dialog=ft.AlertDialog(
+                modal=True,
+                title=ft.Text('Settings changed'),
+                content=ft.Text('You have unsaved changes in this settings section.'),
+                actions=[ft.TextButton('Go Back', on_click=go_back), ft.TextButton('Ignore Changes', on_click=ignore), ft.FilledButton('Save', on_click=save)],
+            )
+            open_dialog(dialog)
+
+        def confirm_clear_history():
+            def cancel(e):
+                close_dialog(dialog)
+            async def proceed(e):
+                close_dialog(dialog)
+                progress=ft.AlertDialog(modal=True, title=ft.Text('Clearing historical metadata...'), content=ft.Column([ft.ProgressRing(), ft.Text('Deleting metadata history. Please wait...')], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER))
+                open_dialog(progress)
+                await asyncio.sleep(0.1)
+                result=await asyncio.to_thread(clear_metadata_history, engine, Session, staged['Danger Zone']['days_to_keep'])
+                close_dialog(progress)
+                message=f'Deleted {result.get("snapshots", 0)} snapshot(s), {result.get("changes", 0)} change record(s), and {result.get("change_groups", 0)} empty change group(s).'
+                complete=ft.AlertDialog(modal=True, title=ft.Text('Job Complete'), content=ft.Text(message), actions=[ft.TextButton('OK', on_click=lambda e: (close_dialog(complete), render_section(), page.update()))])
+                open_dialog(complete)
+            dialog=ft.AlertDialog(
+                modal=True,
+                title=ft.Text('Confirm historical metadata cleanup'),
+                content=ft.Text('Historical metadata will be deleted and this cannot be undone. Settings and app configuration will be preserved.'),
+                actions=[ft.TextButton('Cancel', on_click=cancel), ft.FilledButton('Proceed', bgcolor=ft.Colors.RED, color=ft.Colors.WHITE, on_click=proceed)],
+            )
+            open_dialog(dialog)
+
+        render_section()
+        replace_page_controls(ft.Row([nav, ft.VerticalDivider(width=1), content], expand=True, spacing=16))
+        page.update()
 
     def compact_database_handler(_):
         show_status('Compacting database...')
