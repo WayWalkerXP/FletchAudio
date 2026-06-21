@@ -32,7 +32,19 @@ def test_auto_track_save_exit_removes_stale_dialogs_before_result_dialog():
     assert 'action.on_click=None' in cleanup_flow
     assert 'clear_dialog_state(dialog)' in cleanup_flow
     assert "logging.info('Removing Auto-Track overlays" in cleanup_flow
-    assert save_flow.index('close_auto_track_lifecycle_dialogs()') < save_flow.index('open_dialog(result_dialog)')
+    assert save_flow.index('close_auto_track_lifecycle_dialogs()') < save_flow.index("progress=open_progress_dialog('Saving Auto-Track changes...')")
+    assert save_flow.index("progress=open_progress_dialog('Saving Auto-Track changes...')") < save_flow.index('open_dialog(result_dialog)')
+
+
+def test_auto_track_save_exit_closes_before_progress_dialog():
+    save_flow = _save_exit_flow()
+
+    assert save_flow.index('apply_auto_track_to_rows()') < save_flow.index("dialog_dirty['value']=False")
+    assert save_flow.index("dialog_dirty['value']=False") < save_flow.index('close_auto_track_lifecycle_dialogs()')
+    assert save_flow.index('close_auto_track_lifecycle_dialogs()') < save_flow.index('await asyncio.sleep(0.1)')
+    assert save_flow.index('close_auto_track_lifecycle_dialogs()') < save_flow.index("progress=open_progress_dialog('Saving Auto-Track changes...')")
+    assert save_flow.index('close_dialog(progress)') < save_flow.index('render_mass_update_screen()')
+    assert save_flow.index('render_mass_update_screen()') < save_flow.index('open_dialog(result_dialog)')
 
 
 def test_auto_track_cancel_ignores_stale_closed_dialog_callbacks():
@@ -48,14 +60,14 @@ def test_auto_track_cancel_ignores_stale_closed_dialog_callbacks():
 
 def test_auto_track_save_complete_ok_explicitly_returns_to_mass_update():
     app_source = APP_SOURCE.read_text()
-    helper_source = app_source.split('def return_to_mass_update_screen_from_auto_track_result(result_dialog=None):', 1)[1].split('def cell', 1)[0]
+    helper_source = app_source.split('def return_to_mass_update_screen_from_auto_track_result(result_dialog=None):', 1)[1].split('def render_rows', 1)[0]
     save_flow = _save_exit_flow()
 
     assert "auto_track_result_returned['value']=True" in helper_source
     assert "logging.info('Auto-Track save complete OK clicked" in helper_source
-    assert "auto_track_open['value']=False" in helper_source
-    assert "auto_track_dialog_state['dirty']=False" in helper_source
-    assert 'clear_dialog_state()' in helper_source
+    assert "auto_track_open['value']=False" not in helper_source
+    assert "auto_track_dialog_state['dirty']=False" not in helper_source
+    assert 'clear_dialog_state()' not in helper_source
     assert 'render_mass_update_screen()' in helper_source
     assert 'show_auto_track' not in helper_source
     assert 'build_auto_track' not in helper_source
@@ -64,5 +76,5 @@ def test_auto_track_save_complete_ok_explicitly_returns_to_mass_update():
     assert "auto_track_result_returned['value']=False" in app_source
     assert 'def on_auto_track_save_complete_ok(_):' in save_flow
     assert 'on_click=on_auto_track_save_complete_ok' in save_flow
-    assert 'on_dismiss=lambda _: return_to_mass_update_screen_from_auto_track_result(result_dialog)' in save_flow
+    assert 'on_dismiss=' not in save_flow
     assert 'on_click=lambda ev: close_dialog(result_dialog)' not in save_flow
