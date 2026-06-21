@@ -35,14 +35,14 @@ def test_main_filter_dropdown_has_required_options():
     source = APP_SOURCE
 
     assert "('All Books', 'Folder Books', 'Single File Books', 'Missing Targets', 'Duplicate Books')" in source
-    assert "attach_dropdown_selection_handler(filter_dropdown, handle_search_or_filter_change)" in source
+    assert "attach_dropdown_selection_handler(filter_dropdown, handle_filter_change)" in source
 
 
 def test_main_search_filter_helpers_use_required_fields_and_statuses():
     source = APP_SOURCE
 
     for expected in [
-        "return (search_field.value or '').strip().casefold()",
+        "return (current_search_text or '').strip().casefold()",
         "return target_settings_status(book) == 'red'",
         "duplicate_status.status == 'duplicate'",
         "getattr(first, 'album', None)",
@@ -55,6 +55,32 @@ def test_main_search_filter_helpers_use_required_fields_and_statuses():
     ]:
         assert expected in source
 
+
+
+def test_main_search_change_debounces_book_list_refresh_without_full_render():
+    source = APP_SOURCE
+    handler_source = source.split('    def handle_search_change(event=None):', 1)[1].split('    def handle_filter_change', 1)[0]
+
+    assert 'pending_text=' in handler_source
+    assert 'search_debounce_task.cancel()' in handler_source
+    assert 'asyncio.create_task(apply_debounced_search(pending_text))' in handler_source
+    assert 'render()' not in handler_source
+    assert 'refresh_book_list()' not in handler_source
+    assert 'await asyncio.sleep(1)' in source
+    assert 'refresh_book_list()' in source.split('    async def apply_debounced_search(expected_text):', 1)[1].split('    def handle_search_change', 1)[0]
+
+
+def test_clear_search_and_filter_refresh_book_list_immediately():
+    source = APP_SOURCE
+    filter_source = source.split('    def handle_filter_change(_=None):', 1)[1].split('    def clear_book_search', 1)[0]
+    clear_source = source.split('    def clear_book_search(_=None):', 1)[1].split('    search_field.on_change', 1)[0]
+
+    assert 'update_applied_search_text(search_field.value)' in filter_source
+    assert 'refresh_book_list()' in filter_source
+    assert "search_field.value=''" in clear_source
+    assert "update_applied_search_text('')" in clear_source
+    assert 'search_debounce_task.cancel()' in clear_source
+    assert 'refresh_book_list()' in clear_source
 
 def test_static_header_matches_top_level_book_card_columns():
     source = APP_SOURCE
