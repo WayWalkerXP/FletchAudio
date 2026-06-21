@@ -74,3 +74,19 @@ def test_scan_directory_skips_and_logs_bad_audio_file(tmp_path, monkeypatch, cap
     assert errors == [f'{bad}: unpack requires a buffer of 4 bytes']
     assert f'Audio scan warning: {bad}: unpack requires a buffer of 4 bytes' in caplog.text
     assert 'Traceback (most recent call last)' not in caplog.text
+
+
+def test_scan_directory_reports_progress_for_metadata_extraction(tmp_path, monkeypatch):
+    _patch_reader(monkeypatch)
+    _touch(tmp_path / 'Book One.m4b')
+    _touch(tmp_path / 'Book Two.mp3')
+    _touch(tmp_path / 'notes.txt')
+    updates=[]
+
+    books, errors = scan_directory(str(tmp_path), progress_callback=lambda processed, total, path: updates.append((processed, total, path)))
+
+    assert errors == []
+    assert len(books) == 2
+    assert updates[0] == (0, 2, None)
+    assert updates[-1] == (2, 2, str(tmp_path / 'Book Two.mp3'))
+    assert [update[0] for update in updates] == [0, 1, 2]
