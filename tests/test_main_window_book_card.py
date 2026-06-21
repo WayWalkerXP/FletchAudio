@@ -3,17 +3,14 @@ from pathlib import Path
 
 APP_SOURCE = Path('metadata_collector/app.py').read_text()
 
-
 def _book_top_row_source():
     return APP_SOURCE.split('        def book_top_row(book, first):', 1)[1].split('        def book_actions_row(book):', 1)[0]
-
 
 def test_book_card_primary_metadata_uses_album_not_title():
     source = _book_top_row_source()
 
     assert 'text_cell(first.album, expand=4)' in source
     assert 'text_cell(first.title, expand=4)' not in source
-
 
 def test_top_level_book_cards_include_cover_thumbnail_or_placeholder():
     source = APP_SOURCE
@@ -27,7 +24,6 @@ def test_top_level_book_cards_include_cover_thumbnail_or_placeholder():
     assert 'ft.Icon(ft.Icons.IMAGE_NOT_SUPPORTED_OUTLINED' in source
     assert 'book_cover_thumbnail(book)' in row_source
     assert row_source.index('ft.IconButton(icon=ft.Icons.EDIT') < row_source.index('book_cover_thumbnail(book)') < row_source.index('text_cell(book.display_name')
-
 
 def test_main_menu_places_search_filter_controls_above_status_and_grid():
     source = APP_SOURCE
@@ -44,13 +40,11 @@ def test_main_menu_places_search_filter_controls_above_status_and_grid():
         ]
 """ in source
 
-
 def test_main_filter_dropdown_has_required_options():
     source = APP_SOURCE
 
     assert "('All Books', 'Folder Books', 'Single File Books', 'Missing Targets', 'Duplicate Books')" in source
     assert "attach_dropdown_selection_handler(filter_dropdown, handle_filter_change)" in source
-
 
 def test_main_search_filter_helpers_use_required_fields_and_statuses():
     source = APP_SOURCE
@@ -69,8 +63,6 @@ def test_main_search_filter_helpers_use_required_fields_and_statuses():
     ]:
         assert expected in source
 
-
-
 def test_main_search_change_debounces_book_list_refresh_without_full_render():
     source = APP_SOURCE
     handler_source = source.split('    def handle_search_change(event=None):', 1)[1].split('    def handle_filter_change', 1)[0]
@@ -82,7 +74,6 @@ def test_main_search_change_debounces_book_list_refresh_without_full_render():
     assert 'refresh_book_list()' not in handler_source
     assert 'await asyncio.sleep(1)' in source
     assert 'refresh_book_list()' in source.split('    async def apply_debounced_search(expected_text):', 1)[1].split('    def handle_search_change', 1)[0]
-
 
 def test_clear_search_and_filter_refresh_book_list_immediately():
     source = APP_SOURCE
@@ -118,14 +109,12 @@ def test_static_header_matches_top_level_book_card_columns():
     assert "book_list_header_cell('Title'" not in top_header_source
     assert "book_list_header_cell('Expand'" not in source
 
-
 def test_book_list_cards_keep_right_gap_from_scrollbar_and_header_alignment():
     source = APP_SOURCE
 
     assert 'BOOK_LIST_SCROLLBAR_GAP = 16' in source
     assert 'book_list_header=ft.Container(margin=margin_only(right=BOOK_LIST_SCROLLBAR_GAP))' in source
     assert 'margin=margin_only(bottom=10, right=BOOK_LIST_SCROLLBAR_GAP)' in source
-
 
 def test_expanded_folder_track_listing_uses_table_columns_and_detected_audio_values():
     source = APP_SOURCE
@@ -145,7 +134,6 @@ def test_expanded_folder_track_listing_uses_table_columns_and_detected_audio_val
     ]:
         assert expected in track_source
 
-
 def test_expanded_folder_track_listing_hides_paths_sorts_and_shows_placeholders():
     source = APP_SOURCE
 
@@ -155,3 +143,17 @@ def test_expanded_folder_track_listing_hides_paths_sorts_and_shows_placeholders(
     assert "return (disc is None, int(disc) if disc is not None else 0, track is None, int(track) if track is not None else 0, filename)" in source
     assert 'enumerate(sorted(b.files, key=track_detail_sort_key))' in source
     assert '[track_detail_header_row()] + [child_file_row' in source
+
+def test_folder_books_show_compact_folder_location_line_only_for_folder_books():
+    source = APP_SOURCE
+
+    assert 'def folder_location_text(book):' in source
+    assert "relative_path=folder_path.resolve().relative_to(Path(working_directory).expanduser().resolve())" in source
+    assert "return ' / '.join(relative_path.parts)" in source
+    assert 'def folder_location_line(book):' in source
+    assert 'if not book.is_folder_book:' in source
+    assert 'return None' in source
+    assert "ft.Text(f'Folder: {folder_text}'" in source
+    assert 'selectable=True' in source
+    assert 'tooltip=absolute_path' in source
+    assert 'folder_line=folder_location_line(b)' in source
