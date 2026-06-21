@@ -1681,7 +1681,13 @@ def main(page: ft.Page):
             offset_field.on_change=rebuild_preview
             template_field.on_change=rebuild_preview
             controls_row=ft.Row([preset_field, offset_field, template_field], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START)
-            preview_container=ft.Container(content=preview_table, width=930, height=320, padding=8, border=ft.border.all(1, divider_color), border_radius=6)
+            preview_border=ft.Border(
+                left=ft.BorderSide(1, divider_color),
+                top=ft.BorderSide(1, divider_color),
+                right=ft.BorderSide(1, divider_color),
+                bottom=ft.BorderSide(1, divider_color),
+            )
+            preview_container=ft.Container(content=preview_table, width=930, height=320, padding=8, border=preview_border, border_radius=6)
             content=ft.Container(content=ft.Column([controls_row, error_text, preview_container], tight=True, spacing=12), width=960, padding=ft.padding.only(top=4, left=4, right=4, bottom=0))
             dialog=ft.AlertDialog(modal=True, title=ft.Text('Set Title'), content=content, actions=[ft.TextButton('Cancel', on_click=lambda ev: close_dialog(dialog)), ft.Button('Apply', on_click=apply_set_title), ft.FilledButton('Save and Exit', on_click=save_exit_handler)])
             open_dialog(dialog)
