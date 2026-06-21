@@ -114,7 +114,8 @@ def test_static_header_matches_top_level_book_card_columns():
     for header_cell in expected_header_cells:
         assert header_cell in source
 
-    assert "book_list_header_cell('Title'" not in source
+    top_header_source = source.split('        def build_book_list_header():', 1)[1].split('        book_list_header.content=build_book_list_header()', 1)[0]
+    assert "book_list_header_cell('Title'" not in top_header_source
     assert "book_list_header_cell('Expand'" not in source
 
 
@@ -124,3 +125,33 @@ def test_book_list_cards_keep_right_gap_from_scrollbar_and_header_alignment():
     assert 'BOOK_LIST_SCROLLBAR_GAP = 16' in source
     assert 'book_list_header=ft.Container(margin=margin_only(right=BOOK_LIST_SCROLLBAR_GAP))' in source
     assert 'margin=margin_only(bottom=10, right=BOOK_LIST_SCROLLBAR_GAP)' in source
+
+
+def test_expanded_folder_track_listing_uses_table_columns_and_detected_audio_values():
+    source = APP_SOURCE
+    track_source = source.split('        def track_detail_header_row():', 1)[1].split('        rendered_books=filtered_books()', 1)[0]
+
+    for expected in [
+        "book_list_header_cell('Filename', expand=4)",
+        "book_list_header_cell('Track #', width=82)",
+        "book_list_header_cell('Title', expand=4)",
+        "book_list_header_cell('Bitrate', width=86)",
+        "book_list_header_cell('Channels', width=92)",
+        'text_cell(track_detail_filename(file_meta), expand=4)',
+        'text_cell(track_detail_value(file_meta.track), width=82)',
+        'text_cell(track_detail_value(file_meta.title), expand=4)',
+        'text_cell(track_detail_value(get_actual_bitrate(file_meta)), width=86)',
+        'text_cell(track_detail_value(get_actual_channels(file_meta)), width=92)',
+    ]:
+        assert expected in track_source
+
+
+def test_expanded_folder_track_listing_hides_paths_sorts_and_shows_placeholders():
+    source = APP_SOURCE
+
+    assert "filename=PureWindowsPath(raw_path).name if '\\\\' in raw_path else Path(raw_path).name" in source
+    assert "return filename or '—'" in source
+    assert "return '—' if value is None or str(value).strip() == '' else value" in source
+    assert "return (disc is None, int(disc) if disc is not None else 0, track is None, int(track) if track is not None else 0, filename)" in source
+    assert 'enumerate(sorted(b.files, key=track_detail_sort_key))' in source
+    assert '[track_detail_header_row()] + [child_file_row' in source

@@ -3,7 +3,7 @@ import inspect
 import logging
 import threading
 import uuid
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import flet as ft
 from mutagen import File
@@ -2486,19 +2486,46 @@ def main(page: ft.Page):
                 actions.append(ft.Button('Mass Update', on_click=lambda e, book=book: show_mass_update(book)))
             return ft.Row(actions, spacing=8, wrap=False, alignment=ft.MainAxisAlignment.START)
 
-        def child_file_row(file_meta, index):
-            filename=file_meta.path.name if hasattr(file_meta.path, 'name') else str(file_meta.path)
+        def track_detail_filename(file_meta):
+            raw_path=str(getattr(file_meta, 'path', '') or '')
+            filename=PureWindowsPath(raw_path).name if '\\' in raw_path else Path(raw_path).name
+            return filename or '—'
+
+        def track_detail_value(value):
+            return '—' if value is None or str(value).strip() == '' else value
+
+        def track_detail_sort_key(file_meta):
+            filename=track_detail_filename(file_meta).casefold()
+            disc=getattr(file_meta, 'disc', None)
+            track=getattr(file_meta, 'track', None)
+            return (disc is None, int(disc) if disc is not None else 0, track is None, int(track) if track is not None else 0, filename)
+
+        def track_detail_header_row():
             return ft.Container(
                 content=ft.Row([
-                    text_cell(filename, expand=3),
-                    text_cell(file_meta.track or index + 1, width=72),
-                    text_cell(file_meta.title, expand=2),
-                    text_cell(file_meta.album, expand=2),
-                    text_cell(file_meta.disc, width=64),
-                    text_cell('Yes' if file_meta.has_cover else 'No', width=100),
-                    text_cell('Yes' if file_meta.dramatic_audio else 'No', width=120),
+                    book_list_header_cell('Filename', expand=4),
+                    book_list_header_cell('Track #', width=82),
+                    book_list_header_cell('Title', expand=4),
+                    book_list_header_cell('Bitrate', width=86),
+                    book_list_header_cell('Channels', width=92),
+                ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                padding=padding_only(left=56, right=12, top=8, bottom=8),
+                bgcolor=ft.Colors.SURFACE_CONTAINER,
+                border_radius=6,
+            )
+
+        def child_file_row(file_meta, index):
+            return ft.Container(
+                content=ft.Row([
+                    text_cell(track_detail_filename(file_meta), expand=4),
+                    text_cell(track_detail_value(file_meta.track), width=82),
+                    text_cell(track_detail_value(file_meta.title), expand=4),
+                    text_cell(track_detail_value(get_actual_bitrate(file_meta)), width=86),
+                    text_cell(track_detail_value(get_actual_channels(file_meta)), width=92),
                 ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 padding=padding_only(left=56, right=12, top=6, bottom=6),
+                bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.SURFACE_CONTAINER_HIGHEST) if index % 2 else None,
+                border_radius=6,
             )
 
         rendered_books=filtered_books()
@@ -2513,7 +2540,7 @@ def main(page: ft.Page):
             if b.is_folder_book and b.key in expanded_book_keys:
                 card_content.controls.append(
                     ft.Container(
-                        content=ft.Column([child_file_row(f, i) for i, f in enumerate(b.files)], spacing=2),
+                        content=ft.Column([track_detail_header_row()] + [child_file_row(f, i) for i, f in enumerate(sorted(b.files, key=track_detail_sort_key))], spacing=2),
                         padding=padding_only(top=8),
                     )
                 )
