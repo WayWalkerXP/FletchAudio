@@ -43,4 +43,5 @@ def test_set_title_dialog_preview_is_bounded_and_scrollable():
     assert 'preview_table=ft.Column(scroll=ft.ScrollMode.AUTO' in SET_TITLE_SOURCE
     assert 'preview_container=ft.Container' in SET_TITLE_SOURCE
     assert 'height=320' in SET_TITLE_SOURCE
-    assert 'border=ft.border.all(1, divider_color)' in SET_TITLE_SOURCE
+    assert 'border=ft.Border(' in SET_TITLE_SOURCE
+    assert 'ft.BorderSide(1, divider_color)' in SET_TITLE_SOURCE
