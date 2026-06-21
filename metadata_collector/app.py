@@ -1555,7 +1555,7 @@ def main(page: ft.Page):
             presets={'Chapter': 'Chapter %track%', 'Part': 'Part %track%', 'Track': 'Track %track%', 'CD': 'CD %track%'}
             preset_field=ft.Dropdown(label='Preset', value='Chapter', width=180, options=[ft.dropdown.Option(value) for value in ['Custom', 'Chapter', 'Part', 'Track', 'CD']])
             offset_field=ft.TextField(label='Track Offset', value='0', width=160, dense=True)
-            template_field=ft.TextField(label='Template', value=presets['Chapter'], width=360, dense=True, read_only=True)
+            template_field=ft.TextField(label='Template', value=presets['Chapter'], width=420, dense=True, read_only=True)
             error_text=ft.Text('', color=ft.Colors.RED)
             preview_table=ft.Column(scroll=ft.ScrollMode.AUTO, spacing=0)
 
@@ -1586,7 +1586,12 @@ def main(page: ft.Page):
                     error_text.value='Track Offset must be an integer.'
                 valid, validation_error=validate_title_template(template)
                 logging.info('Set Title template validation result id=%s valid=%s reason=%s', mass_update_screen_id, valid, validation_error)
-                preview_table.controls=[ft.Row([ft.Text('Filename', weight=ft.FontWeight.BOLD, width=260), ft.Text('Track', weight=ft.FontWeight.BOLD, width=90), ft.Text('Current Title', weight=ft.FontWeight.BOLD, width=220), ft.Text('New Title', weight=ft.FontWeight.BOLD, width=220), ft.Text('Status', weight=ft.FontWeight.BOLD, width=170)])]
+                preview_table.controls=[ft.Row([
+                    ft.Text('Filename', weight=ft.FontWeight.BOLD, width=300),
+                    ft.Text('Track', weight=ft.FontWeight.BOLD, width=90),
+                    ft.Text('Current Title', weight=ft.FontWeight.BOLD, width=240),
+                    ft.Text('New Title', weight=ft.FontWeight.BOLD, width=260),
+                ])]
                 for row in selected_rows:
                     if offset is None:
                         new_title, status_value='', 'Invalid offset'
@@ -1598,7 +1603,12 @@ def main(page: ft.Page):
                         logging.info('Set Title preview success id=%s file=%s title=%s', mass_update_screen_id, row.filename, new_title)
                     else:
                         logging.info('Set Title preview failed id=%s file=%s reason=%s', mass_update_screen_id, row.filename, status_value)
-                    preview_table.controls.append(ft.Row([ft.Text(row.filename, selectable=True, width=260, no_wrap=False), ft.Text(row.track, selectable=True, width=90), ft.Text(row.title, selectable=True, width=220, no_wrap=False), ft.Text(new_title, selectable=True, width=220, no_wrap=False), ft.Text(status_value, selectable=True, width=170)], vertical_alignment=ft.CrossAxisAlignment.START))
+                    preview_table.controls.append(ft.Row([
+                        ft.Text(row.filename, selectable=True, width=300, no_wrap=False),
+                        ft.Text(row.track, selectable=True, width=90),
+                        ft.Text(row.title, selectable=True, width=240, no_wrap=False),
+                        ft.Text(new_title, selectable=True, width=260, no_wrap=False),
+                    ], vertical_alignment=ft.CrossAxisAlignment.START))
                 page.update()
 
             def preset_changed(_):
@@ -1609,7 +1619,7 @@ def main(page: ft.Page):
                     template_field.read_only=True
                 rebuild_preview()
 
-            def apply_set_title(_):
+            def apply_generated_titles():
                 raw_offset=offset_field.value
                 template=template_field.value or ''
                 logging.info('Set Title track offset raw value id=%s value=%s', mass_update_screen_id, raw_offset)
@@ -1619,13 +1629,13 @@ def main(page: ft.Page):
                 except ValueError:
                     error_text.value='Track Offset must be an integer.'
                     rebuild_preview()
-                    return
+                    return None
                 valid, validation_error=validate_title_template(template)
                 logging.info('Set Title template validation result id=%s valid=%s reason=%s', mass_update_screen_id, valid, validation_error)
                 if not valid:
                     error_text.value=validation_error or 'Template is invalid.'
                     rebuild_preview()
-                    return
+                    return None
                 updated=unchanged=failed=0
                 for row in selected_rows:
                     new_title, status_value=preview_status(row, template, offset)
@@ -1639,21 +1649,41 @@ def main(page: ft.Page):
                 logging.info('Set Title updated count id=%s updated=%s', mass_update_screen_id, updated)
                 logging.info('Set Title unchanged count id=%s unchanged=%s', mass_update_screen_id, unchanged)
                 logging.info('Set Title failed count id=%s failed=%s', mass_update_screen_id, failed)
+                return updated, unchanged, failed
+
+            def apply_set_title(_):
+                result=apply_generated_titles()
+                if result is None:
+                    return
+                updated, unchanged, failed=result
                 close_dialog(dialog)
                 if updated:
                     mark_unsaved('set title')
-                    render_rows()
                 else:
                     refresh_metadata_dirty()
-                    render_rows()
+                render_rows()
                 summary_dialog=ft.AlertDialog(modal=True, title=ft.Text('Set Title Complete'), content=ft.Text(f'Updated: {updated}\nUnchanged: {unchanged}\nFailed: {failed}', selectable=True), actions=[ft.TextButton('OK', on_click=lambda ev: close_dialog(summary_dialog))])
                 open_dialog(summary_dialog)
+
+            async def save_exit_set_title(e):
+                result=apply_generated_titles()
+                if result is None:
+                    return
+                close_dialog(dialog)
+                refresh_metadata_dirty()
+                render_rows()
+                await save_clicked(e, True)
+
+            def save_exit_handler(e):
+                page.run_task(save_exit_set_title, e) if hasattr(page, 'run_task') else asyncio.create_task(save_exit_set_title(e))
 
             preset_field.on_change=preset_changed
             offset_field.on_change=rebuild_preview
             template_field.on_change=rebuild_preview
-            content=ft.Column([preset_field, offset_field, template_field, error_text, ft.Container(content=preview_table, width=980, height=360)], tight=True, spacing=10)
-            dialog=ft.AlertDialog(modal=True, title=ft.Text('Set Title'), content=content, actions=[ft.TextButton('Cancel', on_click=lambda ev: close_dialog(dialog)), ft.FilledButton('Apply', on_click=apply_set_title)])
+            controls_row=ft.Row([preset_field, offset_field, template_field], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START)
+            preview_container=ft.Container(content=preview_table, width=930, height=320, padding=8, border=ft.border.all(1, divider_color), border_radius=6)
+            content=ft.Container(content=ft.Column([controls_row, error_text, preview_container], tight=True, spacing=12), width=960, padding=ft.padding.only(top=4, left=4, right=4, bottom=0))
+            dialog=ft.AlertDialog(modal=True, title=ft.Text('Set Title'), content=content, actions=[ft.TextButton('Cancel', on_click=lambda ev: close_dialog(dialog)), ft.Button('Apply', on_click=apply_set_title), ft.FilledButton('Save and Exit', on_click=save_exit_handler)])
             open_dialog(dialog)
             rebuild_preview()
 
