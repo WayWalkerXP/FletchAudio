@@ -184,9 +184,31 @@ def main(page: ft.Page):
         compact_db_button.content = compact_database_button_text()
 
 
+    def exit_app(_=None):
+        window = getattr(page, 'window', None)
+        close_window = getattr(window, 'close', None) if window else None
+        if close_window:
+            close_window()
+            return
+        destroy_window = getattr(window, 'destroy', None) if window else None
+        if destroy_window:
+            destroy_window()
+            return
+        window_destroy = getattr(page, 'window_destroy', None)
+        if window_destroy:
+            window_destroy()
+
     def build_main_menu_controls():
+        top_buttons = [
+            ft.Button('Settings', on_click=lambda _: show_settings()),
+            ft.Button('Rescan', on_click=lambda _: scan()),
+            ft.Button('Check for Duplicates', on_click=check_for_duplicates),
+            ft.Button('Move to Staging', on_click=show_move_to_staging),
+            ft.Container(expand=True),
+            ft.Button('Exit', on_click=exit_app),
+        ]
         return [
-            ft.Row([ft.Button('Settings', on_click=lambda _: show_settings()), ft.Button('Rescan', on_click=lambda _: scan()), ft.Button('Check for Duplicates', on_click=check_for_duplicates), ft.Button('Move to Staging', on_click=show_move_to_staging)], wrap=True),
+            ft.Row(top_buttons, expand=True),
             status,
             grid,
         ]
