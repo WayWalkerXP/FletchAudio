@@ -107,6 +107,15 @@ def theme_mode_for_setting(setting):
     return THEME_MODES.get(setting, ft.ThemeMode.SYSTEM)
 
 
+def attach_dropdown_selection_handler(dropdown, handler):
+    """Attach a selection handler across supported Flet Dropdown APIs."""
+    if hasattr(dropdown, 'on_select'):
+        dropdown.on_select = handler
+    if hasattr(dropdown, 'on_change'):
+        dropdown.on_change = handler
+    return dropdown
+
+
 def padding_symmetric(*, horizontal=0, vertical=0):
     return ft.Padding(left=horizontal, right=horizontal, top=vertical, bottom=vertical)
 
@@ -2393,12 +2402,16 @@ def main(page: ft.Page):
                     ft.Row([ft.FilledButton('Save API Settings', on_click=lambda e: (save_section(name), render_section(), page.update())), ft.Button('Cancel/Clear', on_click=lambda e: (staged.__setitem__(name, saved(name)), render_section(), page.update()))]),
                 ])
             elif name == 'Appearance':
-                mode=ft.Dropdown(label='Mode', value=staged[name]['theme'], options=[ft.dropdown.Option(x) for x in THEME_OPTIONS], on_change=lambda e: set_field('theme', e.control.value))
-                if hasattr(mode, 'on_select'):
-                    mode.on_select=lambda e: set_field('theme', e.control.value)
+                mode=attach_dropdown_selection_handler(
+                    ft.Dropdown(label='Mode', value=staged[name]['theme'], options=[ft.dropdown.Option(x) for x in THEME_OPTIONS]),
+                    lambda e: set_field('theme', e.control.value),
+                )
                 content.controls.extend([mode, ft.Row([ft.FilledButton('Save Appearance', on_click=lambda e: (save_section(name), render_section(), page.update())), ft.Button('Cancel/Clear', on_click=lambda e: (staged.__setitem__(name, saved(name)), render_section(), page.update()))])])
             else:
-                days=ft.Dropdown(label='Days of Metadata to Keep', value=staged[name]['days_to_keep'], options=[ft.dropdown.Option(x) for x in ('0','3','7','14','30')], on_change=lambda e: set_field('days_to_keep', e.control.value))
+                days=attach_dropdown_selection_handler(
+                    ft.Dropdown(label='Days of Metadata to Keep', value=staged[name]['days_to_keep'], options=[ft.dropdown.Option(x) for x in ('0','3','7','14','30')]),
+                    lambda e: set_field('days_to_keep', e.control.value),
+                )
                 box=ft.Container(
                     content=ft.Column([
                         ft.Text('Clear Historical Metadata / Clear Metadata from Database', weight=ft.FontWeight.BOLD, color=ft.Colors.RED),
@@ -2490,10 +2503,7 @@ def main(page: ft.Page):
     staging_dir_field=ft.TextField(label='Staging Directory', value=settings.get('staging_dir') or '', width=320)
     abs_url_field=ft.TextField(label='ABS Base URL', value=settings.get('abs_url') or '', width=320)
     abs_api_key_field=ft.TextField(label='ABS API Key', value=settings.get('abs_api_key') or '', password=True, can_reveal_password=False, width=260)
-    if hasattr(theme, 'on_select'):
-        theme.on_select=apply_theme
-    if hasattr(theme, 'on_change'):
-        theme.on_change=apply_theme
+    attach_dropdown_selection_handler(theme, apply_theme)
     async def select_working_directory(e):
         picker=create_file_picker()
         path = await maybe_await(picker.get_directory_path())
