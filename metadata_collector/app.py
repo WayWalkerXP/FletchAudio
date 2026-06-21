@@ -124,7 +124,7 @@ from .audio_scan import scan_directory
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
 from .history import create_change_group, log_changes, metadata_diff, store_snapshot
 from .metadata_map import normalize_response
-from .mass_update import changed_track_title_rows, discover_folder_book_tracks, format_track_number, guess_track_number_from_filename, save_track_title_rows, track_sort_key
+from .mass_update import changed_track_title_rows, discover_folder_book_tracks, format_track_number, guess_track_number_from_filename, guess_title_from_filename, save_track_title_rows, track_sort_key
 from .maintenance import compact_database, database_path, format_bytes, get_database_size_display
 from .staging import destination_for, discover_staging_candidates, move_to_staging, safe_move_to_staging, validate_staging_dir
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
@@ -1513,6 +1513,41 @@ def main(page: ft.Page):
             dialog=ft.AlertDialog(modal=True, title=ft.Text('Guess Tracks Complete'), content=ft.Text(f'Updated: {updated}\nUnchanged: {unchanged}\nFailed: {failed}', selectable=True), actions=[ft.TextButton('OK', on_click=lambda ev: close_dialog(dialog))])
             open_dialog(dialog)
 
+        def auto_title_clicked(e):
+            selected_rows=selected_rows_in_visible_order()
+            logging.info('Auto-Title clicked id=%s', mass_update_screen_id)
+            logging.info('Auto-Title selected row count id=%s selected_rows=%s', mass_update_screen_id, len(selected_rows))
+            guesses=[]
+            failed=0
+            for row in selected_rows:
+                if not row.readable:
+                    failed += 1
+                    logging.info('Auto-Title parse failed id=%s file=%s', mass_update_screen_id, row.filename)
+                    continue
+                guessed=guess_title_from_filename(row.filename)
+                if guessed is None:
+                    failed += 1
+                    logging.info('Auto-Title parse failed id=%s file=%s', mass_update_screen_id, row.filename)
+                    continue
+                logging.info('Auto-Title parse success id=%s file=%s title=%s', mass_update_screen_id, row.filename, guessed)
+                guesses.append((row, guessed))
+            updated=0
+            unchanged=0
+            for row, guessed in guesses:
+                if row.title == guessed:
+                    unchanged += 1
+                else:
+                    row.title=guessed
+                    updated += 1
+            logging.info('Auto-Title rows updated id=%s updated=%s unchanged=%s failed=%s', mass_update_screen_id, updated, unchanged, failed)
+            logging.info('Auto-Title unchanged count id=%s unchanged=%s', mass_update_screen_id, unchanged)
+            logging.info('Auto-Title failed count id=%s failed=%s', mass_update_screen_id, failed)
+            if updated:
+                mark_unsaved('auto title')
+                render_rows()
+            dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Title Complete'), content=ft.Text(f'Updated: {updated}\nUnchanged: {unchanged}\nFailed: {failed}', selectable=True), actions=[ft.TextButton('OK', on_click=lambda ev: close_dialog(dialog))])
+            open_dialog(dialog)
+
         def auto_track_clicked(e):
             auto_track_open['value']=True
             auto_track_result_returned['value']=False
@@ -1688,7 +1723,7 @@ def main(page: ft.Page):
         action_buttons=ft.Row([
             ft.Button('Guess Tracks', on_click=guess_tracks_clicked),
             ft.Button('Auto-Track', on_click=auto_track_clicked),
-            ft.Button('Auto-Title', on_click=lambda e: future_placeholder('Auto-Title')),
+            ft.Button('Auto-Title', on_click=auto_title_clicked),
             ft.Button('Set Title', on_click=lambda e: future_placeholder('Set Title')),
             ft.TextButton('Cancel', on_click=cancel_clicked),
             ft.FilledButton('Save', on_click=save_button_handler),
