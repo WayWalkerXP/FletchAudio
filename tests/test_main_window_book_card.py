@@ -41,9 +41,10 @@ def test_static_header_matches_top_level_book_card_columns():
         "book_list_header_cell('ASIN', width=110)",
         "book_list_header_cell('Duplicate', width=126)",
         "book_list_header_cell('Tracks', width=92)",
-        "book_list_header_cell('Expand', width=42)",
+        "book_list_header_spacer(width=42)",
     ]
     for header_cell in expected_header_cells:
         assert header_cell in source
 
     assert "book_list_header_cell('Title'" not in source
+    assert "book_list_header_cell('Expand'" not in source
