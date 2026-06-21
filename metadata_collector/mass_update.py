@@ -166,6 +166,48 @@ def guess_title_from_filename(filename: str) -> str | None:
     return title or None
 
 
+
+SUPPORTED_SET_TITLE_PLACEHOLDERS = {'track', 'filename', 'title'}
+
+def parse_track_offset(value: str | None) -> int:
+    raw = '' if value is None else str(value).strip()
+    if raw == '':
+        return 0
+    if not re.fullmatch(r'[+-]?\d+', raw):
+        raise ValueError('Invalid offset')
+    return int(raw)
+
+def apply_track_offset(track: str, offset: int) -> str | None:
+    raw = '' if track is None else str(track).strip()
+    if not raw.isdigit():
+        return None
+    width = len(raw)
+    result = int(raw) + offset
+    if result < 1:
+        return None
+    return f'{result:0{width}d}'
+
+def validate_title_template(template: str) -> tuple[bool, str | None]:
+    if template is None or not str(template).strip():
+        return False, 'Generated title is blank'
+    placeholders = re.findall(r'%([^%]+)%', str(template))
+    for placeholder in placeholders:
+        if placeholder not in SUPPORTED_SET_TITLE_PLACEHOLDERS:
+            return False, 'Unsupported placeholder'
+    return True, None
+
+def render_title_template(template: str, row, offset: int) -> str | None:
+    rendered_track = ''
+    if '%track%' in str(template):
+        rendered_track = apply_track_offset(getattr(row, 'track', ''), offset)
+        if rendered_track is None:
+            return None
+    filename = getattr(row, 'filename', '') or ''
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    title = getattr(row, 'title', '') or ''
+    rendered = str(template).replace('%track%', rendered_track).replace('%filename%', stem).replace('%title%', title).strip()
+    return rendered or None
+
 def discover_folder_book_tracks(folder_path) -> list[MassUpdateTrackRow]:
     folder = Path(folder_path).expanduser()
     rows: list[MassUpdateTrackRow] = []
