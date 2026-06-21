@@ -184,19 +184,43 @@ def main(page: ft.Page):
         compact_db_button.content = compact_database_button_text()
 
 
-    def exit_app(_=None):
+    async def close_current_window():
         window = getattr(page, 'window', None)
         close_window = getattr(window, 'close', None) if window else None
         if close_window:
-            close_window()
+            close_result = close_window()
+            if inspect.isawaitable(close_result):
+                await close_result
             return
         destroy_window = getattr(window, 'destroy', None) if window else None
         if destroy_window:
-            destroy_window()
+            destroy_result = destroy_window()
+            if inspect.isawaitable(destroy_result):
+                await destroy_result
             return
         window_destroy = getattr(page, 'window_destroy', None)
         if window_destroy:
-            window_destroy()
+            destroy_result = window_destroy()
+            if inspect.isawaitable(destroy_result):
+                await destroy_result
+
+    def exit_app(_=None):
+        exit_dialog = None
+
+        async def confirm_exit(_):
+            close_dialog(exit_dialog)
+            await close_current_window()
+
+        exit_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text('Exit FletchAudio?'),
+            content=ft.Text('Are you sure you want to exit the program?'),
+            actions=[
+                ft.FilledButton('Exit', on_click=confirm_exit),
+                ft.TextButton('Go Back', on_click=lambda _: close_dialog(exit_dialog)),
+            ],
+        )
+        open_dialog(exit_dialog)
 
     def build_main_menu_controls():
         toolbar = ft.Row(
