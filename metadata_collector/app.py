@@ -26,6 +26,7 @@ TARGET_STATUS_COLORS = {
     'yellow': ft.Colors.AMBER,
 }
 BOOK_LIST_SCROLLBAR_GAP = 16
+BOOK_COVER_THUMBNAIL_SIZE = 64
 
 RUNTIME_RESULT_ROW_COLORS = {
     'green': ft.Colors.with_opacity(0.18, ft.Colors.GREEN),
@@ -2380,6 +2381,7 @@ def main(page: ft.Page):
             return ft.Container(
                 content=ft.Row([
                     book_list_header_cell('Edit', width=48),
+                    book_list_header_spacer(width=BOOK_COVER_THUMBNAIL_SIZE),
                     book_list_header_cell('Name', expand=4),
                     book_list_header_cell('Album', expand=4),
                     book_list_header_cell('Author', expand=3),
@@ -2404,6 +2406,30 @@ def main(page: ft.Page):
                 expanded_book_keys.add(book.key)
             render()
 
+        def book_cover_file(book):
+            return next((file_meta for file_meta in book.files if getattr(file_meta, 'cover_data_uri', None)), None)
+
+        def book_cover_thumbnail(book):
+            cover_file=book_cover_file(book)
+            if cover_file:
+                return ft.Container(
+                    content=ft.Image(src=cover_file.cover_data_uri, width=BOOK_COVER_THUMBNAIL_SIZE, height=BOOK_COVER_THUMBNAIL_SIZE, fit=IMAGE_CONTAIN_FIT),
+                    width=BOOK_COVER_THUMBNAIL_SIZE,
+                    height=BOOK_COVER_THUMBNAIL_SIZE,
+                    alignment=ft.Alignment(0, 0),
+                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                    border_radius=6,
+                )
+            return ft.Container(
+                content=ft.Icon(ft.Icons.IMAGE_NOT_SUPPORTED_OUTLINED, size=28, color=ft.Colors.ON_SURFACE_VARIANT),
+                width=BOOK_COVER_THUMBNAIL_SIZE,
+                height=BOOK_COVER_THUMBNAIL_SIZE,
+                alignment=ft.Alignment(0, 0),
+                bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+                border_radius=6,
+                tooltip='No cover art',
+            )
+
         def duplicate_status_pill(book):
             duplicate_status=duplicate_statuses.get(book.key)
             if not duplicate_status:
@@ -2426,6 +2452,7 @@ def main(page: ft.Page):
                     width=48,
                     alignment=ft.Alignment(0, 0),
                 ),
+                book_cover_thumbnail(book),
                 text_cell(book.display_name, expand=4, weight=ft.FontWeight.BOLD),
                 text_cell(first.album, expand=4),
                 text_cell(first.author, expand=3),
@@ -2481,7 +2508,7 @@ def main(page: ft.Page):
             first=b.files[0]
             card_content=ft.Column([
                 book_top_row(b, first),
-                ft.Container(content=book_actions_row(b), padding=padding_only(left=52, top=8)),
+                ft.Container(content=book_actions_row(b), padding=padding_only(left=122, top=8)),
             ], spacing=4)
             if b.is_folder_book and b.key in expanded_book_keys:
                 card_content.controls.append(

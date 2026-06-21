@@ -15,6 +15,20 @@ def test_book_card_primary_metadata_uses_album_not_title():
     assert 'text_cell(first.title, expand=4)' not in source
 
 
+def test_top_level_book_cards_include_cover_thumbnail_or_placeholder():
+    source = APP_SOURCE
+    row_source = _book_top_row_source()
+
+    assert 'BOOK_COVER_THUMBNAIL_SIZE = 64' in source
+    assert 'def book_cover_file(book):' in source
+    assert "next((file_meta for file_meta in book.files if getattr(file_meta, 'cover_data_uri', None)), None)" in source
+    assert 'def book_cover_thumbnail(book):' in source
+    assert 'ft.Image(src=cover_file.cover_data_uri, width=BOOK_COVER_THUMBNAIL_SIZE, height=BOOK_COVER_THUMBNAIL_SIZE' in source
+    assert 'ft.Icon(ft.Icons.IMAGE_NOT_SUPPORTED_OUTLINED' in source
+    assert 'book_cover_thumbnail(book)' in row_source
+    assert row_source.index('ft.IconButton(icon=ft.Icons.EDIT') < row_source.index('book_cover_thumbnail(book)') < row_source.index('text_cell(book.display_name')
+
+
 def test_main_menu_places_search_filter_controls_above_status_and_grid():
     source = APP_SOURCE
 
