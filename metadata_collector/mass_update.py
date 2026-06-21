@@ -120,6 +120,32 @@ def guess_track_number_from_filename(filename: str) -> int | None:
     return track_number if track_number > 0 else None
 
 
+
+
+def guess_title_from_filename(filename: str) -> str | None:
+    base_name = os.path.basename(filename or '')
+    stem, extension = os.path.splitext(base_name)
+    if not stem and extension:
+        stem = base_name
+    stem = stem.strip()
+    if not stem:
+        return None
+    if stem.isdigit() or re.match(r'^[\[(]\s*\d+\s*[\])]\s*[-_. ]*$', stem):
+        return None
+
+    bracketed_match = re.match(r'^\s*[\[(]\s*\d+\s*[\])]\s*[-_. ]*\s*(.+)$', stem)
+    if bracketed_match:
+        title = bracketed_match.group(1).strip(' -_.\t')
+        return title or None
+
+    numeric_match = re.match(r'^\s*\d+\s*[-_. ]+\s*(.+)$', stem)
+    if numeric_match:
+        title = numeric_match.group(1).strip(' -_.\t')
+        return title or None
+
+    return stem or None
+
+
 def discover_folder_book_tracks(folder_path) -> list[MassUpdateTrackRow]:
     folder = Path(folder_path).expanduser()
     rows: list[MassUpdateTrackRow] = []

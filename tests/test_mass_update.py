@@ -101,3 +101,32 @@ def test_save_track_title_rows_keeps_failed_rows_dirty(monkeypatch, tmp_path):
     assert row.original_track == '01'
     assert row.original_title == 'Old'
     assert row.changed
+
+from metadata_collector.mass_update import guess_title_from_filename
+
+
+def test_guess_title_from_filename_supported_prefixes():
+    examples = {
+        '01. Chapter 1.mp3': 'Chapter 1',
+        '38 - Chapter 38.m4b': 'Chapter 38',
+        '24. Chapter 8 - Yesterday.mp3': 'Chapter 8 - Yesterday',
+        '12 - A New Day.mp3': 'A New Day',
+        '01_Some_Track.mp3': 'Some_Track',
+        '1 Some Track.mp3': 'Some Track',
+        '[01] Some Track.mp3': 'Some Track',
+        '(01) Some Track.mp3': 'Some Track',
+        '001 - Title.mp3': 'Title',
+    }
+    assert {name: guess_title_from_filename(name) for name in examples} == examples
+
+
+def test_guess_title_from_filename_uses_stem_for_non_numeric_and_ignores_path():
+    assert guess_title_from_filename('/tmp/books/Prologue.mp3') == 'Prologue'
+    assert guess_title_from_filename('/tmp/books/Chapter One.m4b') == 'Chapter One'
+
+
+def test_guess_title_from_filename_rejects_empty_results():
+    assert guess_title_from_filename('01.mp3') is None
+    assert guess_title_from_filename('01 - .mp3') is None
+    assert guess_title_from_filename('[01].mp3') is None
+    assert guess_title_from_filename('   ') is None
