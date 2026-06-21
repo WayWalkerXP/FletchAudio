@@ -107,6 +107,6 @@ def test_static_header_matches_top_level_book_card_columns():
 def test_book_list_cards_keep_right_gap_from_scrollbar_and_header_alignment():
     source = APP_SOURCE
 
-    assert 'BOOK_LIST_SCROLLBAR_GAP = 12' in source
+    assert 'BOOK_LIST_SCROLLBAR_GAP = 16' in source
     assert 'book_list_header=ft.Container(margin=margin_only(right=BOOK_LIST_SCROLLBAR_GAP))' in source
     assert 'margin=margin_only(bottom=10, right=BOOK_LIST_SCROLLBAR_GAP)' in source

@@ -25,7 +25,7 @@ TARGET_STATUS_COLORS = {
     'red': ft.Colors.RED,
     'yellow': ft.Colors.AMBER,
 }
-BOOK_LIST_SCROLLBAR_GAP = 12
+BOOK_LIST_SCROLLBAR_GAP = 16
 
 RUNTIME_RESULT_ROW_COLORS = {
     'green': ft.Colors.with_opacity(0.18, ft.Colors.GREEN),
