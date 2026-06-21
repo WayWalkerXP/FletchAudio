@@ -124,7 +124,7 @@ from .audio_scan import scan_directory
 from .audio_tags import NON_WRITABLE_FIELDS, format_genres_for_tag, read_audio_metadata, write_audio_metadata
 from .history import create_change_group, log_changes, metadata_diff, store_snapshot
 from .metadata_map import normalize_response
-from .mass_update import changed_track_title_rows, discover_folder_book_tracks, format_track_number, guess_track_number_from_filename, guess_title_from_filename, save_track_title_rows, track_sort_key
+from .mass_update import apply_track_offset, changed_track_title_rows, discover_folder_book_tracks, format_track_number, guess_track_number_from_filename, guess_title_from_filename, parse_track_offset, render_title_template, save_track_title_rows, track_sort_key, validate_title_template
 from .maintenance import compact_database, database_path, format_bytes, get_database_size_display
 from .staging import destination_for, discover_staging_candidates, move_to_staging, safe_move_to_staging, validate_staging_dir
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
@@ -1548,6 +1548,115 @@ def main(page: ft.Page):
             dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Title Complete'), content=ft.Text(f'Updated: {updated}\nUnchanged: {unchanged}\nFailed: {failed}', selectable=True), actions=[ft.TextButton('OK', on_click=lambda ev: close_dialog(dialog))])
             open_dialog(dialog)
 
+        def set_title_clicked(e):
+            selected_rows=selected_rows_in_visible_order()
+            logging.info('Set Title clicked id=%s', mass_update_screen_id)
+            logging.info('Set Title selected row count id=%s selected_rows=%s', mass_update_screen_id, len(selected_rows))
+            presets={'Chapter': 'Chapter %track%', 'Part': 'Part %track%', 'Track': 'Track %track%', 'CD': 'CD %track%'}
+            preset_field=ft.Dropdown(label='Preset', value='Chapter', width=180, options=[ft.dropdown.Option(value) for value in ['Custom', 'Chapter', 'Part', 'Track', 'CD']])
+            offset_field=ft.TextField(label='Track Offset', value='0', width=160, dense=True)
+            template_field=ft.TextField(label='Template', value=presets['Chapter'], width=360, dense=True, read_only=True)
+            error_text=ft.Text('', color=ft.Colors.RED)
+            preview_table=ft.Column(scroll=ft.ScrollMode.AUTO, spacing=0)
+
+            def preview_status(row, template, offset):
+                if not row.readable:
+                    return '', 'Unreadable'
+                if '%track%' in template:
+                    adjusted_track=apply_track_offset(row.track, offset)
+                    if adjusted_track is None:
+                        raw_track=(row.track or '').strip()
+                        return '', 'Invalid track' if not raw_track.isdigit() else 'Resulting track less than 1'
+                new_title=render_title_template(template, row, offset)
+                if new_title is None:
+                    return '', 'Generated title is blank'
+                return new_title, 'OK'
+
+            def rebuild_preview(_=None):
+                raw_offset=offset_field.value
+                template=template_field.value or ''
+                logging.info('Set Title selected preset id=%s preset=%s', mass_update_screen_id, preset_field.value)
+                logging.info('Set Title track offset raw value id=%s value=%s', mass_update_screen_id, raw_offset)
+                logging.info('Set Title template value id=%s value=%s', mass_update_screen_id, template)
+                try:
+                    offset=parse_track_offset(raw_offset)
+                    error_text.value=''
+                except ValueError:
+                    offset=None
+                    error_text.value='Track Offset must be an integer.'
+                valid, validation_error=validate_title_template(template)
+                logging.info('Set Title template validation result id=%s valid=%s reason=%s', mass_update_screen_id, valid, validation_error)
+                preview_table.controls=[ft.Row([ft.Text('Filename', weight=ft.FontWeight.BOLD, width=260), ft.Text('Track', weight=ft.FontWeight.BOLD, width=90), ft.Text('Current Title', weight=ft.FontWeight.BOLD, width=220), ft.Text('New Title', weight=ft.FontWeight.BOLD, width=220), ft.Text('Status', weight=ft.FontWeight.BOLD, width=170)])]
+                for row in selected_rows:
+                    if offset is None:
+                        new_title, status_value='', 'Invalid offset'
+                    elif not valid:
+                        new_title, status_value='', validation_error or 'Unsupported placeholder'
+                    else:
+                        new_title, status_value=preview_status(row, template, offset)
+                    if status_value == 'OK':
+                        logging.info('Set Title preview success id=%s file=%s title=%s', mass_update_screen_id, row.filename, new_title)
+                    else:
+                        logging.info('Set Title preview failed id=%s file=%s reason=%s', mass_update_screen_id, row.filename, status_value)
+                    preview_table.controls.append(ft.Row([ft.Text(row.filename, selectable=True, width=260, no_wrap=False), ft.Text(row.track, selectable=True, width=90), ft.Text(row.title, selectable=True, width=220, no_wrap=False), ft.Text(new_title, selectable=True, width=220, no_wrap=False), ft.Text(status_value, selectable=True, width=170)], vertical_alignment=ft.CrossAxisAlignment.START))
+                page.update()
+
+            def preset_changed(_):
+                if preset_field.value == 'Custom':
+                    template_field.read_only=False
+                else:
+                    template_field.value=presets.get(preset_field.value, '')
+                    template_field.read_only=True
+                rebuild_preview()
+
+            def apply_set_title(_):
+                raw_offset=offset_field.value
+                template=template_field.value or ''
+                logging.info('Set Title track offset raw value id=%s value=%s', mass_update_screen_id, raw_offset)
+                try:
+                    offset=parse_track_offset(raw_offset)
+                    logging.info('Set Title track offset parsed value id=%s value=%s', mass_update_screen_id, offset)
+                except ValueError:
+                    error_text.value='Track Offset must be an integer.'
+                    rebuild_preview()
+                    return
+                valid, validation_error=validate_title_template(template)
+                logging.info('Set Title template validation result id=%s valid=%s reason=%s', mass_update_screen_id, valid, validation_error)
+                if not valid:
+                    error_text.value=validation_error or 'Template is invalid.'
+                    rebuild_preview()
+                    return
+                updated=unchanged=failed=0
+                for row in selected_rows:
+                    new_title, status_value=preview_status(row, template, offset)
+                    if status_value != 'OK':
+                        failed += 1
+                    elif row.title == new_title:
+                        unchanged += 1
+                    else:
+                        row.title=new_title
+                        updated += 1
+                logging.info('Set Title updated count id=%s updated=%s', mass_update_screen_id, updated)
+                logging.info('Set Title unchanged count id=%s unchanged=%s', mass_update_screen_id, unchanged)
+                logging.info('Set Title failed count id=%s failed=%s', mass_update_screen_id, failed)
+                close_dialog(dialog)
+                if updated:
+                    mark_unsaved('set title')
+                    render_rows()
+                else:
+                    refresh_metadata_dirty()
+                    render_rows()
+                summary_dialog=ft.AlertDialog(modal=True, title=ft.Text('Set Title Complete'), content=ft.Text(f'Updated: {updated}\nUnchanged: {unchanged}\nFailed: {failed}', selectable=True), actions=[ft.TextButton('OK', on_click=lambda ev: close_dialog(summary_dialog))])
+                open_dialog(summary_dialog)
+
+            preset_field.on_change=preset_changed
+            offset_field.on_change=rebuild_preview
+            template_field.on_change=rebuild_preview
+            content=ft.Column([preset_field, offset_field, template_field, error_text, ft.Container(content=preview_table, width=980, height=360)], tight=True, spacing=10)
+            dialog=ft.AlertDialog(modal=True, title=ft.Text('Set Title'), content=content, actions=[ft.TextButton('Cancel', on_click=lambda ev: close_dialog(dialog)), ft.FilledButton('Apply', on_click=apply_set_title)])
+            open_dialog(dialog)
+            rebuild_preview()
+
         def auto_track_clicked(e):
             auto_track_open['value']=True
             auto_track_result_returned['value']=False
@@ -1724,7 +1833,7 @@ def main(page: ft.Page):
             ft.Button('Guess Tracks', on_click=guess_tracks_clicked),
             ft.Button('Auto-Track', on_click=auto_track_clicked),
             ft.Button('Auto-Title', on_click=auto_title_clicked),
-            ft.Button('Set Title', on_click=lambda e: future_placeholder('Set Title')),
+            ft.Button('Set Title', on_click=set_title_clicked),
             ft.TextButton('Cancel', on_click=cancel_clicked),
             ft.FilledButton('Save', on_click=save_button_handler),
             ft.FilledButton('Save & Exit', on_click=save_exit_button_handler),

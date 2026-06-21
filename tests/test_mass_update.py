@@ -150,3 +150,30 @@ def test_guess_title_from_filename_rejects_empty_results():
     assert guess_title_from_filename('01 - .mp3') is None
     assert guess_title_from_filename('[01].mp3') is None
     assert guess_title_from_filename('   ') is None
+
+
+def test_set_title_track_offset_parsing_and_padding():
+    from metadata_collector.mass_update import apply_track_offset, parse_track_offset
+
+    assert parse_track_offset(None) == 0
+    assert parse_track_offset('') == 0
+    assert parse_track_offset(' -10 ') == -10
+    assert apply_track_offset('03', 0) == '03'
+    assert apply_track_offset('03', -1) == '02'
+    assert apply_track_offset('003', -1) == '002'
+    assert apply_track_offset('3', -1) == '2'
+    assert apply_track_offset('10', 5) == '15'
+    assert apply_track_offset('01', -1) is None
+    assert apply_track_offset('ABC', 0) is None
+
+
+def test_set_title_template_validation_and_rendering(tmp_path):
+    from metadata_collector.mass_update import MassUpdateTrackRow, render_title_template, validate_title_template
+
+    row = MassUpdateTrackRow(tmp_path / '01 - Opening Credits.mp3', '01 - Opening Credits.mp3', '03', 'Old', '03', 'Current')
+    assert validate_title_template('Chapter %track%')[0]
+    assert validate_title_template('%filename% - %title%')[0]
+    assert not validate_title_template('Part %disc%')[0]
+    assert not validate_title_template('   ')[0]
+    assert render_title_template('Chapter %track%', row, -1) == 'Chapter 02'
+    assert render_title_template('%filename% - %title%', row, -99) == '01 - Opening Credits - Current'
