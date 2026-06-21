@@ -158,7 +158,7 @@ def main(page: ft.Page):
     engine=init_db(); Session=get_session_factory(engine); settings=load_settings(); books=[]
     log_page_state(page, 'app startup before main window render')
     page.title='FletchAudio'; page.theme_mode=theme_mode_for_setting(settings.get('theme'))
-    status=ft.Text('Select a working directory to begin.'); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); duplicate_statuses={}; url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(content='Compact Database', on_click=None)
+    status=ft.Text('Select a working directory to begin.'); book_list_header=ft.Container(); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); duplicate_statuses={}; url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(content='Compact Database', on_click=None)
     active_move_to_staging_screen_id=None
     current_screen='main'
     if hasattr(page, 'services'):
@@ -241,6 +241,7 @@ def main(page: ft.Page):
         return [
             toolbar,
             status,
+            book_list_header,
             grid,
         ]
 
@@ -2261,6 +2262,36 @@ def main(page: ft.Page):
                 padding=padding_symmetric(horizontal=4),
                 alignment=ft.Alignment(-1, 0),
             )
+
+        def book_list_header_cell(label, *, width=None, expand=None):
+            return ft.Container(
+                content=ft.Text(label, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS, tooltip=label, weight=ft.FontWeight.BOLD),
+                width=width,
+                expand=expand,
+                padding=padding_symmetric(horizontal=4),
+                alignment=ft.Alignment(-1, 0),
+            )
+
+        def build_book_list_header():
+            return ft.Container(
+                content=ft.Row([
+                    book_list_header_cell('Edit', width=48),
+                    book_list_header_cell('Name', expand=4),
+                    book_list_header_cell('Album', expand=4),
+                    book_list_header_cell('Author', expand=3),
+                    book_list_header_cell('Narrator', expand=3),
+                    book_list_header_cell('Series', expand=4),
+                    book_list_header_cell('ASIN', width=110),
+                    book_list_header_cell('Duplicate', width=126),
+                    book_list_header_cell('Tracks', width=92),
+                    book_list_header_cell('Expand', width=42),
+                ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                padding=padding_only(left=12, right=12, top=8, bottom=8),
+                border_radius=8,
+                bgcolor=ft.Colors.SURFACE_CONTAINER,
+            )
+
+        book_list_header.content=build_book_list_header()
 
         def toggle_book_expansion(book):
             if book.key in expanded_book_keys:
