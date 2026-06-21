@@ -199,16 +199,23 @@ def main(page: ft.Page):
             window_destroy()
 
     def build_main_menu_controls():
-        top_buttons = [
-            ft.Button('Settings', on_click=lambda _: show_settings()),
-            ft.Button('Rescan', on_click=lambda _: scan()),
-            ft.Button('Check for Duplicates', on_click=check_for_duplicates),
-            ft.Button('Move to Staging', on_click=show_move_to_staging),
-            ft.Container(expand=True),
-            ft.Button('Exit', on_click=exit_app),
-        ]
+        toolbar = ft.Row(
+            [
+                ft.Row(
+                    [
+                        ft.Button('Settings', on_click=lambda _: show_settings()),
+                        ft.Button('Rescan', on_click=lambda _: scan()),
+                        ft.Button('Check for Duplicates', on_click=check_for_duplicates),
+                        ft.Button('Move to Staging', on_click=show_move_to_staging),
+                    ],
+                    spacing=10,
+                ),
+                ft.Button('Exit', on_click=exit_app),
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        )
         return [
-            ft.Row(top_buttons, expand=True),
+            toolbar,
             status,
             grid,
         ]
