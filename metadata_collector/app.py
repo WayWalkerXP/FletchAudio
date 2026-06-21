@@ -2758,22 +2758,76 @@ def main(page: ft.Page):
         abs_api_key_field.value=api_key
         show_status('Audiobookshelf settings saved.' if abs_url and api_key else 'Audiobookshelf settings incomplete.')
         page.update()
-    def scan(path=None):
+    def build_scan_progress_dialog():
+        progress_bar=ft.ProgressBar(value=None, width=360)
+        progress_text=ft.Text('Preparing to scan files and extract metadata...')
+        detail_text=ft.Text('', size=12, selectable=True)
+        dialog=ft.AlertDialog(
+            modal=True,
+            title=ft.Text('Scanning Working Directory'),
+            content=ft.Column(
+                [
+                    ft.Text('Scanning files and extracting metadata...'),
+                    progress_bar,
+                    progress_text,
+                    detail_text,
+                ],
+                tight=True,
+                spacing=10,
+            ),
+        )
+        return dialog, progress_bar, progress_text, detail_text
+
+    async def scan_async(path=None):
         nonlocal books
         path=path or settings.get('working_directory')
-        if not path: status.value='No working directory selected.'; page.update(); return
+        if not path:
+            status.value='No working directory selected.'; page.update(); return
         settings['working_directory']=path; save_settings(settings); status.value=f'Scanning {path}...'; page.update()
+        progress_dialog, progress_bar, progress_text, detail_text=build_scan_progress_dialog()
+        loop=asyncio.get_running_loop()
+
+        def apply_scan_progress(processed, total, current_path):
+            if total:
+                progress_bar.value=processed / total
+                progress_text.value=f'{processed} of {total} files processed'
+            else:
+                progress_bar.value=None
+                progress_text.value='Discovering audio files...'
+            detail_text.value=str(current_path) if current_path else ''
+            try:
+                page.update()
+            except Exception:
+                logging.debug('Scan progress update failed', exc_info=True)
+
+        def update_scan_progress(processed, total, current_path):
+            loop.call_soon_threadsafe(apply_scan_progress, processed, total, current_path)
+
+        open_dialog(progress_dialog)
+        await asyncio.sleep(0.1)
         try:
-            books, errors=scan_directory(path)
+            scanned_books, errors=await asyncio.to_thread(scan_directory, path, update_scan_progress)
             with Session() as s:
-                for b in books: store_snapshot(s,b,'scan')
+                for b in scanned_books: store_snapshot(s,b,'scan')
+            books=scanned_books
             status.value=f'Found {len(books)} books.' + (f' {len(errors)} scan warnings logged.' if errors else '')
             for err in errors: logging.warning('Audio scan warning: %s', err)
+            close_dialog(progress_dialog)
             render()
         except Exception as exc:
+            close_dialog(progress_dialog)
             logging.exception('Failed to scan and render main menu for %s', path)
             render_main_menu_error_state(str(exc))
             page.update()
+
+    def scan(path=None):
+        if hasattr(page, 'run_task'):
+            return page.run_task(scan_async, path)
+        try:
+            loop=asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(scan_async(path))
+        return loop.create_task(scan_async(path))
     compact_db_button.on_click = compact_database_handler
     refresh_compact_database_button()
     log_page_state(page, 'before app startup main window render')
