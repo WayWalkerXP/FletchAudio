@@ -1409,10 +1409,6 @@ def main(page: ft.Page):
             logging.info('Auto-Track save complete OK clicked id=%s dialog_id=%s', mass_update_screen_id, id(result_dialog) if result_dialog is not None else None)
             if result_dialog is not None:
                 close_dialog(result_dialog, log_label='Auto-Track save complete')
-            auto_track_open['value']=False
-            auto_track_dialog_state['dirty']=False
-            logging.info('After close: auto_track_open=%s id=%s', auto_track_open['value'], mass_update_screen_id)
-            clear_dialog_state()
             refresh_metadata_dirty()
             logging.info('Rendering Mass Update after report OK id=%s', mass_update_screen_id)
             render_mass_update_screen()
@@ -1584,19 +1580,21 @@ def main(page: ft.Page):
             async def save_exit_dialog_values(e):
                 logging.info('Auto-Track Save and Exit clicked id=%s', mass_update_screen_id)
                 apply_auto_track_to_rows()
+                dialog_dirty['value']=False
+                auto_track_dialog_state['dirty']=False
+                logging.info('Auto-Track dirty state cleared id=%s', mass_update_screen_id)
+                close_auto_track_lifecycle_dialogs()
+                await asyncio.sleep(0.1)
                 refresh_metadata_dirty()
                 logging.info('Changed rows count id=%s value=%s', mass_update_screen_id, len(changed_track_title_rows(rows)))
                 progress=open_progress_dialog('Saving Auto-Track changes...')
                 await asyncio.sleep(0.1)
                 successes, unchanged, failures=save_track_title_rows(rows)
                 close_dialog(progress)
+                await asyncio.sleep(0.1)
                 logging.info('Auto-Track save successful id=%s saved=%s unchanged=%s failures=%s', mass_update_screen_id, successes, unchanged, len(failures))
                 logging.info('Saved rows count id=%s value=%s', mass_update_screen_id, successes)
                 logging.info('Failed rows count id=%s value=%s', mass_update_screen_id, len(failures))
-                dialog_dirty['value']=False
-                auto_track_dialog_state['dirty']=False
-                logging.info('Auto-Track dirty state cleared id=%s', mass_update_screen_id)
-                close_auto_track_lifecycle_dialogs()
                 refresh_metadata_dirty()
                 render_mass_update_screen()
                 log_auto_track_final_state()
@@ -1608,7 +1606,7 @@ def main(page: ft.Page):
                 result_dialog=None
                 def on_auto_track_save_complete_ok(_):
                     return_to_mass_update_screen_from_auto_track_result(result_dialog)
-                result_dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Track save complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=on_auto_track_save_complete_ok)], on_dismiss=lambda _: return_to_mass_update_screen_from_auto_track_result(result_dialog))
+                result_dialog=ft.AlertDialog(modal=True, title=ft.Text('Auto-Track save complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=on_auto_track_save_complete_ok)])
                 open_dialog(result_dialog)
             def cancel_dialog_values(_):
                 dialog_open=auto_track_dialog_is_open()
