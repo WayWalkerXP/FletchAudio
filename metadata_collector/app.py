@@ -158,7 +158,7 @@ def main(page: ft.Page):
     engine=init_db(); Session=get_session_factory(engine); settings=load_settings(); books=[]
     log_page_state(page, 'app startup before main window render')
     page.title='FletchAudio'; page.theme_mode=theme_mode_for_setting(settings.get('theme'))
-    status=ft.Text('Select a working directory to begin.'); search_field=ft.TextField(label='Search books', hint_text='Search name, album, author, narrator, series, ASIN...', expand=True); filter_dropdown=ft.Dropdown(label='Filter', value='All Books', width=220, options=[ft.dropdown.Option(option) for option in ('All Books', 'Folder Books', 'Single File Books', 'Missing Targets', 'Duplicate Books')]); clear_search_button=ft.Button('Clear Search'); book_list_header=ft.Container(); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); duplicate_statuses={}; url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(content='Compact Database', on_click=None)
+    status=ft.Text('Select a working directory to begin.'); search_field=ft.TextField(label='Search books', hint_text='Search name, album, author, narrator, series, ASIN...', expand=True); filter_dropdown=ft.Dropdown(label='Filter', value='All Books', width=220, options=[ft.dropdown.Option(option) for option in ('All Books', 'Folder Books', 'Single File Books', 'Missing Targets', 'Duplicate Books')]); clear_search_button=ft.Button('Clear Search'); book_list_header=ft.Container(); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); duplicate_statuses={}; current_search_text=''; search_debounce_task=None; url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(content='Compact Database', on_click=None)
     active_move_to_staging_screen_id=None
     current_screen='main'
     if hasattr(page, 'services'):
@@ -2258,7 +2258,7 @@ def main(page: ft.Page):
         return filter_dropdown.value or 'All Books'
 
     def normalized_search_text():
-        return (search_field.value or '').strip().casefold()
+        return (current_search_text or '').strip().casefold()
 
     def book_has_missing_targets(book):
         return target_settings_status(book) == 'red'
@@ -2314,23 +2314,42 @@ def main(page: ft.Page):
         else:
             status.value=f'Showing {rendered_count} of {total_count} book' + ('' if total_count == 1 else 's') + '.'
 
-    def handle_search_or_filter_change(_=None):
-        render()
+    def update_applied_search_text(value):
+        nonlocal current_search_text
+        current_search_text=value or ''
+
+    async def apply_debounced_search(expected_text):
+        try:
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            return
+        update_applied_search_text(expected_text)
+        refresh_book_list()
+
+    def handle_search_change(event=None):
+        nonlocal search_debounce_task
+        pending_text=getattr(getattr(event, 'control', None), 'value', search_field.value) or ''
+        if search_debounce_task and not search_debounce_task.done():
+            search_debounce_task.cancel()
+        search_debounce_task=(page.run_task(apply_debounced_search, pending_text) if hasattr(page, 'run_task') else asyncio.create_task(apply_debounced_search(pending_text)))
+
+    def handle_filter_change(_=None):
+        update_applied_search_text(search_field.value)
+        refresh_book_list()
 
     def clear_book_search(_=None):
+        nonlocal search_debounce_task
+        if search_debounce_task and not search_debounce_task.done():
+            search_debounce_task.cancel()
         search_field.value=''
-        render()
+        update_applied_search_text('')
+        refresh_book_list()
 
-    search_field.on_change=handle_search_or_filter_change
-    attach_dropdown_selection_handler(filter_dropdown, handle_search_or_filter_change)
+    search_field.on_change=handle_search_change
+    attach_dropdown_selection_handler(filter_dropdown, handle_filter_change)
     clear_search_button.on_click=clear_book_search
 
-    def render():
-        nonlocal current_screen
-        current_screen='main'
-        page.route='/'
-        replace_page_controls(*build_main_menu_controls())
-        log_page_state(page, 'before rendering main menu')
+    def refresh_book_list():
         refresh_compact_database_button()
         grid.controls.clear()
 
@@ -2480,6 +2499,15 @@ def main(page: ft.Page):
                 )
             )
         page.update()
+        log_page_state(page, 'after refreshing main book list')
+
+    def render():
+        nonlocal current_screen
+        current_screen='main'
+        page.route='/'
+        replace_page_controls(*build_main_menu_controls())
+        log_page_state(page, 'before rendering main menu')
+        refresh_book_list()
         log_page_state(page, 'after rendering main menu')
 
     def show_settings(section='Directories'):
