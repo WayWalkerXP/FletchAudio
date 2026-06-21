@@ -1553,11 +1553,14 @@ def main(page: ft.Page):
             logging.info('Set Title clicked id=%s', mass_update_screen_id)
             logging.info('Set Title selected row count id=%s selected_rows=%s', mass_update_screen_id, len(selected_rows))
             presets={'Chapter': 'Chapter %track%', 'Part': 'Part %track%', 'Track': 'Track %track%', 'CD': 'CD %track%'}
-            preset_field=ft.Dropdown(label='Preset', value='Chapter', width=180, options=[ft.dropdown.Option(value) for value in ['Custom', 'Chapter', 'Part', 'Track', 'CD']])
+            preset_field=ft.Dropdown(label='Preset', value='Chapter', width=180, options=[ft.dropdown.Option(value) for value in ['Chapter', 'Part', 'Track', 'CD', 'Custom']])
             offset_field=ft.TextField(label='Track Offset', value='0', width=160, dense=True)
-            template_field=ft.TextField(label='Template', value=presets['Chapter'], width=420, dense=True, read_only=True)
+            template_field=ft.TextField(label='Template', value=presets['Chapter'], width=420, dense=True)
+            apply_button=ft.Button('Apply')
             error_text=ft.Text('', color=ft.Colors.RED)
             preview_table=ft.Column(scroll=ft.ScrollMode.AUTO, spacing=0)
+            generated_titles={}
+            dialog_dirty={'value': False}
 
             def preview_status(row, template, offset):
                 if not row.readable:
@@ -1573,19 +1576,6 @@ def main(page: ft.Page):
                 return new_title, 'OK'
 
             def rebuild_preview(_=None):
-                raw_offset=offset_field.value
-                template=template_field.value or ''
-                logging.info('Set Title selected preset id=%s preset=%s', mass_update_screen_id, preset_field.value)
-                logging.info('Set Title track offset raw value id=%s value=%s', mass_update_screen_id, raw_offset)
-                logging.info('Set Title template value id=%s value=%s', mass_update_screen_id, template)
-                try:
-                    offset=parse_track_offset(raw_offset)
-                    error_text.value=''
-                except ValueError:
-                    offset=None
-                    error_text.value='Track Offset must be an integer.'
-                valid, validation_error=validate_title_template(template)
-                logging.info('Set Title template validation result id=%s valid=%s reason=%s', mass_update_screen_id, valid, validation_error)
                 preview_table.controls=[ft.Row([
                     ft.Text('Filename', weight=ft.FontWeight.BOLD, width=300),
                     ft.Text('Track', weight=ft.FontWeight.BOLD, width=90),
@@ -1593,15 +1583,10 @@ def main(page: ft.Page):
                     ft.Text('New Title', weight=ft.FontWeight.BOLD, width=260),
                 ])]
                 for row in selected_rows:
-                    if offset is None:
-                        new_title, status_value='', 'Invalid offset'
-                    elif not valid:
-                        new_title, status_value='', validation_error or 'Unsupported placeholder'
-                    else:
-                        new_title, status_value=preview_status(row, template, offset)
+                    new_title, status_value=generated_titles.get(id(row), ('', 'Not applied'))
                     if status_value == 'OK':
                         logging.info('Set Title preview success id=%s file=%s title=%s', mass_update_screen_id, row.filename, new_title)
-                    else:
+                    elif status_value != 'Not applied':
                         logging.info('Set Title preview failed id=%s file=%s reason=%s', mass_update_screen_id, row.filename, status_value)
                     preview_table.controls.append(ft.Row([
                         ft.Text(row.filename, selectable=True, width=300, no_wrap=False),
@@ -1611,18 +1596,24 @@ def main(page: ft.Page):
                     ], vertical_alignment=ft.CrossAxisAlignment.START))
                 page.update()
 
-            def preset_changed(_):
-                if preset_field.value == 'Custom':
-                    template_field.read_only=False
-                else:
-                    template_field.value=presets.get(preset_field.value, '')
-                    template_field.read_only=True
-                rebuild_preview()
+            def set_dialog_dirty():
+                dialog_dirty['value']=True
 
-            def apply_generated_titles():
+            def preset_changed(_):
+                if preset_field.value != 'Custom':
+                    template_field.value=presets.get(preset_field.value, template_field.value or '')
+                set_dialog_dirty()
+                page.update()
+
+            def field_changed(_):
+                set_dialog_dirty()
+
+            def generate_preview_titles():
                 raw_offset=offset_field.value
                 template=template_field.value or ''
+                logging.info('Set Title selected preset id=%s preset=%s', mass_update_screen_id, preset_field.value)
                 logging.info('Set Title track offset raw value id=%s value=%s', mass_update_screen_id, raw_offset)
+                logging.info('Set Title template value id=%s value=%s', mass_update_screen_id, template)
                 try:
                     offset=parse_track_offset(raw_offset)
                     logging.info('Set Title track offset parsed value id=%s value=%s', mass_update_screen_id, offset)
@@ -1636,9 +1627,34 @@ def main(page: ft.Page):
                     error_text.value=validation_error or 'Template is invalid.'
                     rebuild_preview()
                     return None
+                generated_titles.clear()
                 updated=unchanged=failed=0
                 for row in selected_rows:
                     new_title, status_value=preview_status(row, template, offset)
+                    generated_titles[id(row)]=(new_title, status_value)
+                    if status_value != 'OK':
+                        failed += 1
+                    elif row.title == new_title:
+                        unchanged += 1
+                    else:
+                        updated += 1
+                error_text.value=''
+                logging.info('Set Title updated count id=%s updated=%s', mass_update_screen_id, updated)
+                logging.info('Set Title unchanged count id=%s unchanged=%s', mass_update_screen_id, unchanged)
+                logging.info('Set Title failed count id=%s failed=%s', mass_update_screen_id, failed)
+                rebuild_preview()
+                return updated, unchanged, failed
+
+            def apply_set_title(_):
+                result=generate_preview_titles()
+                if result is None:
+                    return
+                dialog_dirty['value']=True
+
+            def apply_generated_titles():
+                updated=unchanged=failed=0
+                for row in selected_rows:
+                    new_title, status_value=generated_titles.get(id(row), ('', 'Not applied'))
                     if status_value != 'OK':
                         failed += 1
                     elif row.title == new_title:
@@ -1646,41 +1662,42 @@ def main(page: ft.Page):
                     else:
                         row.title=new_title
                         updated += 1
-                logging.info('Set Title updated count id=%s updated=%s', mass_update_screen_id, updated)
-                logging.info('Set Title unchanged count id=%s unchanged=%s', mass_update_screen_id, unchanged)
-                logging.info('Set Title failed count id=%s failed=%s', mass_update_screen_id, failed)
                 return updated, unchanged, failed
 
-            def apply_set_title(_):
-                result=apply_generated_titles()
-                if result is None:
-                    return
-                updated, unchanged, failed=result
+            async def save_exit_set_title(e):
+                updated, unchanged, failed=apply_generated_titles()
+                logging.info('Set Title save and exit values id=%s updated=%s unchanged=%s failed=%s', mass_update_screen_id, updated, unchanged, failed)
                 close_dialog(dialog)
                 if updated:
                     mark_unsaved('set title')
                 else:
                     refresh_metadata_dirty()
                 render_rows()
-                summary_dialog=ft.AlertDialog(modal=True, title=ft.Text('Set Title Complete'), content=ft.Text(f'Updated: {updated}\nUnchanged: {unchanged}\nFailed: {failed}', selectable=True), actions=[ft.TextButton('OK', on_click=lambda ev: close_dialog(summary_dialog))])
-                open_dialog(summary_dialog)
-
-            async def save_exit_set_title(e):
-                result=apply_generated_titles()
-                if result is None:
-                    return
-                close_dialog(dialog)
-                refresh_metadata_dirty()
-                render_rows()
                 await save_clicked(e, True)
 
             def save_exit_handler(e):
                 page.run_task(save_exit_set_title, e) if hasattr(page, 'run_task') else asyncio.create_task(save_exit_set_title(e))
 
+            def cancel_set_title(_):
+                if not dialog_dirty['value']:
+                    close_dialog(dialog)
+                    render_mass_update_screen()
+                    return
+                confirm_dialog=None
+                def stay(_):
+                    close_dialog(confirm_dialog)
+                def discard(_):
+                    close_dialog(confirm_dialog)
+                    close_dialog(dialog)
+                    render_mass_update_screen()
+                confirm_dialog=ft.AlertDialog(modal=True, title=ft.Text('Discard Set Title changes?'), content=ft.Text('You have unsaved Set Title changes.'), actions=[ft.TextButton('Stay', on_click=stay), ft.FilledButton('Discard', on_click=discard)])
+                open_dialog(confirm_dialog)
+
             preset_field.on_change=preset_changed
-            offset_field.on_change=rebuild_preview
-            template_field.on_change=rebuild_preview
-            controls_row=ft.Row([preset_field, offset_field, template_field], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START)
+            offset_field.on_change=field_changed
+            template_field.on_change=field_changed
+            apply_button.on_click=apply_set_title
+            controls_row=ft.Row([preset_field, offset_field, template_field, apply_button], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START)
             preview_border=ft.Border(
                 left=ft.BorderSide(1, divider_color),
                 top=ft.BorderSide(1, divider_color),
@@ -1689,7 +1706,7 @@ def main(page: ft.Page):
             )
             preview_container=ft.Container(content=preview_table, width=930, height=320, padding=8, border=preview_border, border_radius=6)
             content=ft.Container(content=ft.Column([controls_row, error_text, preview_container], tight=True, spacing=12), width=960, padding=ft.Padding(top=4, left=4, right=4, bottom=0))
-            dialog=ft.AlertDialog(modal=True, title=ft.Text('Set Title'), content=content, actions=[ft.TextButton('Cancel', on_click=lambda ev: close_dialog(dialog)), ft.Button('Apply', on_click=apply_set_title), ft.FilledButton('Save and Exit', on_click=save_exit_handler)])
+            dialog=ft.AlertDialog(modal=True, title=ft.Text('Set Title'), content=content, actions=[ft.TextButton('Cancel', on_click=cancel_set_title), ft.FilledButton('Save and Exit', on_click=save_exit_handler)])
             open_dialog(dialog)
             rebuild_preview()
 
