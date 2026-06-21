@@ -2239,7 +2239,7 @@ def main(page: ft.Page):
                     alignment=ft.Alignment(0, 0),
                 ),
                 text_cell(book.display_name, expand=4, weight=ft.FontWeight.BOLD),
-                text_cell(first.title, expand=4),
+                text_cell(first.album, expand=4),
                 text_cell(first.author, expand=3),
                 text_cell(first.narrator, expand=3),
                 text_cell(series, expand=4),
