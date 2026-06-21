@@ -1552,10 +1552,9 @@ def main(page: ft.Page):
             selected_rows=selected_rows_in_visible_order()
             logging.info('Set Title clicked id=%s', mass_update_screen_id)
             logging.info('Set Title selected row count id=%s selected_rows=%s', mass_update_screen_id, len(selected_rows))
-            presets={'Chapter': 'Chapter %track%', 'Part': 'Part %track%', 'Track': 'Track %track%', 'CD': 'CD %track%'}
-            preset_field=ft.Dropdown(label='Preset', value='Chapter', width=180, options=[ft.dropdown.Option(value) for value in ['Chapter', 'Part', 'Track', 'CD', 'Custom']])
+            preset_field=ft.Dropdown(label='Preset', value='Not Implemented', width=180, options=[ft.dropdown.Option('Not Implemented')])
             offset_field=ft.TextField(label='Track Offset', value='0', width=160, dense=True)
-            template_field=ft.TextField(label='Template', value=presets['Chapter'], width=420, dense=True)
+            template_field=ft.TextField(label='Template', value='', width=420, dense=True)
             apply_button=ft.Button('Apply')
             error_text=ft.Text('', color=ft.Colors.RED)
             preview_table=ft.Column(scroll=ft.ScrollMode.AUTO, spacing=0)
@@ -1598,12 +1597,6 @@ def main(page: ft.Page):
 
             def set_dialog_dirty():
                 dialog_dirty['value']=True
-
-            def preset_changed(_):
-                if preset_field.value != 'Custom':
-                    template_field.value=presets.get(preset_field.value, template_field.value or '')
-                set_dialog_dirty()
-                page.update()
 
             def field_changed(_):
                 set_dialog_dirty()
@@ -1673,7 +1666,7 @@ def main(page: ft.Page):
                 else:
                     refresh_metadata_dirty()
                 render_rows()
-                await save_clicked(e, True)
+                await save_clicked(e, False)
 
             def save_exit_handler(e):
                 page.run_task(save_exit_set_title, e) if hasattr(page, 'run_task') else asyncio.create_task(save_exit_set_title(e))
@@ -1693,7 +1686,6 @@ def main(page: ft.Page):
                 confirm_dialog=ft.AlertDialog(modal=True, title=ft.Text('Discard Set Title changes?'), content=ft.Text('You have unsaved Set Title changes.'), actions=[ft.TextButton('Stay', on_click=stay), ft.FilledButton('Discard', on_click=discard)])
                 open_dialog(confirm_dialog)
 
-            preset_field.on_change=preset_changed
             offset_field.on_change=field_changed
             template_field.on_change=field_changed
             apply_button.on_click=apply_set_title
