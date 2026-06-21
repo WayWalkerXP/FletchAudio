@@ -1,5 +1,5 @@
 import json
-from metadata_collector.history import metadata_diff, selectable_restore_values
+from metadata_collector.history import cleanup_metadata_history, metadata_diff, selectable_restore_values
 from metadata_collector.models import AudioFileMetadata, BookSnapshot
 
 def test_metadata_diff_generation():
@@ -62,10 +62,17 @@ def _add_change(session, book_key, file_path, tag, old, new, when):
     group = ChangeGroup(book_key=book_key, source_type='manual', description=f'{tag} change', created_at=when)
     session.add(group)
     session.flush()
-    change = MetadataChange(change_group_id=group.id, book_key=book_key, file_path=file_path, tag_name=tag, old_value=old, new_value=new, source_type='manual')
+    change = MetadataChange(change_group_id=group.id, book_key=book_key, file_path=file_path, tag_name=tag, old_value=old, new_value=new, source_type='manual', changed_at=when)
     session.add(change)
     session.commit()
     return group, change
+
+
+def _add_snapshot(session, book_key, when):
+    snap = BookSnapshot(book_key=book_key, path=f'{book_key}.mp3', is_folder_book=False, source_type='scan', metadata_json='[]', created_at=when)
+    session.add(snap)
+    session.commit()
+    return snap
 
 
 def test_list_change_groups_newest_first():
@@ -76,6 +83,30 @@ def test_list_change_groups_newest_first():
     groups = list_change_groups_for_file(session, 'book', 'a.mp3')
     assert [item.group.id for item in groups] == [second.id, first.id]
     assert [item.changed_field_count for item in groups] == [1, 1]
+
+
+def test_cleanup_metadata_history_deletes_only_old_history():
+    session = _memory_session()
+    old = datetime.utcnow() - timedelta(days=5)
+    recent = datetime.utcnow()
+    old_snapshot = _add_snapshot(session, 'old-book', old)
+    recent_snapshot = _add_snapshot(session, 'recent-book', recent)
+    old_group, _ = _add_change(session, 'old-book', 'old.mp3', 'title', 'Old', 'New', old)
+    recent_group, _ = _add_change(session, 'recent-book', 'recent.mp3', 'title', 'Old', 'New', recent)
+    old_snapshot_id = old_snapshot.id
+    recent_snapshot_id = recent_snapshot.id
+    old_group_id = old_group.id
+    recent_group_id = recent_group.id
+
+    deleted = cleanup_metadata_history(session, days_to_keep=3)
+
+    assert deleted == {'snapshots': 1, 'changes': 1, 'change_groups': 1}
+    assert session.get(BookSnapshot, old_snapshot_id) is None
+    assert session.get(BookSnapshot, recent_snapshot_id) is not None
+    assert session.query(MetadataChange).filter_by(book_key='old-book').count() == 0
+    assert session.query(MetadataChange).filter_by(book_key='recent-book').count() == 1
+    assert session.get(ChangeGroup, old_group_id) is None
+    assert session.get(ChangeGroup, recent_group_id) is not None
 
 
 def test_restore_one_selected_tag_builds_update():

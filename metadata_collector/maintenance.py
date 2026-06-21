@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 from sqlalchemy import text
 from .history import cleanup_cover_bloat
+from .history import cleanup_metadata_history
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,16 @@ def compact_database(engine, Session) -> dict[str, int | None]:
     before = database_size_bytes(engine)
     with Session() as session:
         cleanup = cleanup_cover_bloat(session)
+    with engine.connect() as connection:
+        connection.execute(text('VACUUM'))
+    after = database_size_bytes(engine)
+    return {'before_size_bytes': before, 'after_size_bytes': after, **cleanup}
+
+
+def clear_metadata_history(engine, Session, days_to_keep=3) -> dict[str, int | None]:
+    before = database_size_bytes(engine)
+    with Session() as session:
+        cleanup = cleanup_metadata_history(session, days_to_keep)
     with engine.connect() as connection:
         connection.execute(text('VACUUM'))
     after = database_size_bytes(engine)
