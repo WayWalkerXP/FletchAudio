@@ -2419,7 +2419,12 @@ def main(page: ft.Page):
                         days,
                         ft.Row([ft.FilledButton('Proceed', bgcolor=ft.Colors.RED, color=ft.Colors.WHITE, on_click=lambda e: confirm_clear_history()), ft.Button('Cancel/Clear', on_click=lambda e: (staged.__setitem__(name, saved(name)), render_section(), page.update()))]),
                     ]),
-                    border=ft.border.all(1, ft.Colors.RED),
+                    border=ft.Border(
+                        left=ft.BorderSide(1, ft.Colors.RED),
+                        top=ft.BorderSide(1, ft.Colors.RED),
+                        right=ft.BorderSide(1, ft.Colors.RED),
+                        bottom=ft.BorderSide(1, ft.Colors.RED),
+                    ),
                     border_radius=8,
                     padding=12,
                 )
