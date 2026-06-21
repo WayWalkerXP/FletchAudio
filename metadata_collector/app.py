@@ -278,6 +278,15 @@ def main(page: ft.Page):
                 control.open = False
             if close_control:
                 close_control(control)
+            else:
+                # In Flet 0.85+, page.close() does not exist. page.update() only
+                # patches the page object and does NOT push dialog.open=False to
+                # Flutter (dialogs live in the private _dialogs subtree). We must
+                # call control.update() explicitly so Flutter receives open=False.
+                try:
+                    control.update()
+                except Exception:
+                    pass
         if hasattr(page, 'dialog'):
             page.dialog = None
         if overlay is not None:
