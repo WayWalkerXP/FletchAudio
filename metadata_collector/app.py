@@ -34,10 +34,8 @@ RUNTIME_RESULT_ROW_COLORS = {
     'red': ft.Colors.with_opacity(0.18, ft.Colors.RED),
 }
 
-
 def _metadata_path(file_metadata_or_path):
     return getattr(file_metadata_or_path, 'path', file_metadata_or_path)
-
 
 def get_actual_bitrate(file_metadata_or_path) -> int | None:
     path = _metadata_path(file_metadata_or_path)
@@ -56,7 +54,6 @@ def get_actual_bitrate(file_metadata_or_path) -> int | None:
     except (TypeError, ValueError):
         return None
 
-
 def get_actual_channels(file_metadata_or_path) -> int | None:
     path = _metadata_path(file_metadata_or_path)
     if not path:
@@ -74,13 +71,11 @@ def get_actual_channels(file_metadata_or_path) -> int | None:
     except (TypeError, ValueError):
         return None
 
-
 def summarize_distinct_values(values) -> str:
     distinct = sorted({int(value) for value in values if value is not None})
     if not distinct:
         return 'Unknown'
     return ', '.join(str(value) for value in distinct)
-
 
 def normalize_target_int(value):
     if value is None:
@@ -89,7 +84,6 @@ def normalize_target_int(value):
         return str(int(str(value).strip()))
     except (TypeError, ValueError):
         return None
-
 
 def target_settings_status(book):
     bitrate_values=[]
@@ -108,7 +102,6 @@ def target_settings_status(book):
 def theme_mode_for_setting(setting):
     return THEME_MODES.get(setting, ft.ThemeMode.SYSTEM)
 
-
 def attach_dropdown_selection_handler(dropdown, handler):
     """Attach a selection handler across supported Flet Dropdown APIs."""
     if hasattr(dropdown, 'on_select'):
@@ -116,7 +109,6 @@ def attach_dropdown_selection_handler(dropdown, handler):
     if hasattr(dropdown, 'on_change'):
         dropdown.on_change = handler
     return dropdown
-
 
 def padding_symmetric(*, horizontal=0, vertical=0):
     return ft.Padding(left=horizontal, right=horizontal, top=vertical, bottom=vertical)
@@ -2443,6 +2435,29 @@ def main(page: ft.Page):
             label, bgcolor, color=pill_specs.get(duplicate_status.status, ('Unknown', ft.Colors.GREY_600, ft.Colors.WHITE))
             return ft.Container(content=ft.Text(label, color=color, size=12, weight=ft.FontWeight.BOLD), bgcolor=bgcolor, border_radius=999, padding=padding_symmetric(horizontal=10, vertical=4), width=126, alignment=ft.Alignment(0, 0), tooltip=duplicate_status.message or None)
 
+        def folder_location_text(book):
+            working_directory=settings.get('working_directory')
+            folder_path=Path(book.path)
+            if working_directory:
+                try:
+                    relative_path=folder_path.resolve().relative_to(Path(working_directory).expanduser().resolve())
+                    if str(relative_path) != '.':
+                        return ' / '.join(relative_path.parts)
+                except (OSError, ValueError):
+                    pass
+            return str(folder_path)
+
+        def folder_location_line(book):
+            if not book.is_folder_book:
+                return None
+            folder_text=folder_location_text(book)
+            absolute_path=str(Path(book.path))
+            return ft.Container(
+                content=ft.Text(f'Folder: {folder_text}', size=12, selectable=True, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS, tooltip=absolute_path),
+                padding=padding_only(left=122, bottom=4),
+                alignment=ft.Alignment(-1, 0),
+            )
+
         def book_top_row(book, first):
             series=' '.join(part for part in [first.series, first.series_sequence] if part)
             expanded=book.key in expanded_book_keys
@@ -2533,10 +2548,15 @@ def main(page: ft.Page):
 
         for b in rendered_books:
             first=b.files[0]
-            card_content=ft.Column([
+            card_controls=[]
+            folder_line=folder_location_line(b)
+            if folder_line:
+                card_controls.append(folder_line)
+            card_controls.extend([
                 book_top_row(b, first),
                 ft.Container(content=book_actions_row(b), padding=padding_only(left=122, top=8)),
-            ], spacing=4)
+            ])
+            card_content=ft.Column(card_controls, spacing=4)
             if b.is_folder_book and b.key in expanded_book_keys:
                 card_content.controls.append(
                     ft.Container(
