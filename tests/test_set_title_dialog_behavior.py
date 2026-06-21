@@ -3,7 +3,6 @@ from pathlib import Path
 SOURCE = Path('metadata_collector/app.py').read_text()
 SET_TITLE_SOURCE = SOURCE.split('        def set_title_clicked(e):', 1)[1].split('        def auto_track_clicked(e):', 1)[0]
 REBUILD_PREVIEW_SOURCE = SET_TITLE_SOURCE.split('            def rebuild_preview(_=None):', 1)[1].split('            def set_dialog_dirty():', 1)[0]
-PRESET_SOURCE = SET_TITLE_SOURCE.split('            def preset_changed(_):', 1)[1].split('            def field_changed(_):', 1)[0]
 APPLY_SOURCE = SET_TITLE_SOURCE.split('            def apply_set_title(_):', 1)[1].split('            def apply_generated_titles():', 1)[0]
 SAVE_APPLY_SOURCE = SET_TITLE_SOURCE.split('            def apply_generated_titles():', 1)[1].split('            async def save_exit_set_title(e):', 1)[0]
 SAVE_EXIT_SOURCE = SET_TITLE_SOURCE.split('            async def save_exit_set_title(e):', 1)[1].split('            def save_exit_handler(e):', 1)[0]
@@ -46,7 +45,8 @@ def test_set_title_save_exit_uses_generated_titles_and_reuses_mass_update_save_f
     assert 'row.title=new_title' in SAVE_APPLY_SOURCE
     assert "mark_unsaved('set title')" in SAVE_EXIT_SOURCE
     assert 'render_rows()' in SAVE_EXIT_SOURCE
-    assert 'await save_clicked(e, True)' in SAVE_EXIT_SOURCE
+    assert 'await save_clicked(e, False)' in SAVE_EXIT_SOURCE
+    assert 'return_to_main()' not in SAVE_EXIT_SOURCE
 
 
 def test_set_title_dialog_preview_is_bounded_and_scrollable():
@@ -57,12 +57,14 @@ def test_set_title_dialog_preview_is_bounded_and_scrollable():
     assert 'ft.BorderSide(1, divider_color)' in SET_TITLE_SOURCE
 
 
-def test_set_title_presets_update_template_but_keep_template_editable():
-    assert "presets={'Chapter': 'Chapter %track%', 'Part': 'Part %track%', 'Track': 'Track %track%', 'CD': 'CD %track%'}" in SET_TITLE_SOURCE
-    assert "options=[ft.dropdown.Option(value) for value in ['Chapter', 'Part', 'Track', 'CD', 'Custom']]" in SET_TITLE_SOURCE
+def test_set_title_preset_dropdown_is_not_implemented_and_template_editable():
+    assert "preset_field=ft.Dropdown(label='Preset', value='Not Implemented'" in SET_TITLE_SOURCE
+    assert "options=[ft.dropdown.Option('Not Implemented')]" in SET_TITLE_SOURCE
+    assert "template_field=ft.TextField(label='Template', value='', width=420, dense=True)" in SET_TITLE_SOURCE
     assert 'read_only=True' not in SET_TITLE_SOURCE
-    assert "if preset_field.value != 'Custom':" in PRESET_SOURCE
-    assert "template_field.value=presets.get(preset_field.value, template_field.value or '')" in PRESET_SOURCE
+    assert 'def preset_changed' not in SET_TITLE_SOURCE
+    assert 'preset_field.on_change' not in SET_TITLE_SOURCE
+    assert 'template_field.value=presets' not in SET_TITLE_SOURCE
 
 
 def test_set_title_cancel_prompts_when_dirty():
