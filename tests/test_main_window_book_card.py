@@ -136,9 +136,10 @@ def test_expanded_folder_track_listing_uses_table_columns_and_detected_audio_val
 
 def test_expanded_folder_track_listing_hides_paths_sorts_and_shows_placeholders():
     source = APP_SOURCE
+    filename_source = source.split('        def track_detail_filename(file_meta):', 1)[1].split('        def track_detail_value(value):', 1)[0]
 
-    assert "filename=PureWindowsPath(raw_path).name if '\\\\' in raw_path else Path(raw_path).name" in source
-    assert "return filename or '—'" in source
+    assert "filename=PureWindowsPath(raw_path).name if '\\\\' in raw_path else Path(raw_path).name" in filename_source
+    assert "filename or '—'" in filename_source
     assert "return '—' if value is None or str(value).strip() == '' else value" in source
     assert "return (disc is None, int(disc) if disc is not None else 0, track is None, int(track) if track is not None else 0, filename)" in source
     assert 'enumerate(sorted(b.files, key=track_detail_sort_key))' in source
