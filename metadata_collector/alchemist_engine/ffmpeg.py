@@ -307,3 +307,33 @@ def build_ffmpeg_command(input_path: Path, output_path: Path, codec: str, bitrat
         "0",
         str(output_path),
     ]
+
+
+def build_ffmpeg_concat_command(concat_file: Path, metadata_file: Path, output_path: Path, codec: str, bitrate_kbps: int, channels: int) -> list[str]:
+    """Build a folder-book conversion command using FFmpeg's concat demuxer."""
+    return [
+        "ffmpeg",
+        "-hide_banner",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(concat_file),
+        "-i",
+        str(metadata_file),
+        "-map",
+        "0:a:0",
+        "-map_metadata",
+        "1",
+        "-map_chapters",
+        "1",
+        "-c:a",
+        codec,
+        "-b:a",
+        f"{bitrate_kbps}k",
+        "-ac",
+        str(channels),
+        str(output_path),
+    ]

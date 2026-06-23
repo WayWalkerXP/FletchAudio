@@ -15,7 +15,6 @@ from .conversion_planner import ConversionPlanResult, plan_conversion
 from .conversion_runner import ConversionProgressEvent, ConversionResult, ConversionStatus
 from .models import Book
 
-FOLDER_CONVERSION_UNSUPPORTED = "Folder conversion is not implemented yet"
 ARCHIVE_DIRECTORY_REQUIRED = (
     "Archive Directory is not configured. Please configure it in "
     "Settings > Directories before using conversion features."
@@ -73,8 +72,6 @@ def build_ui_conversion_settings(app_settings: Mapping[str, object]) -> Conversi
 
 
 def prepare_conversion(book: Book, app_settings: Mapping[str, object]) -> PreparedConversion:
-    if book.is_folder_book:
-        raise ConversionUiError(FOLDER_CONVERSION_UNSUPPORTED)
     settings = build_ui_conversion_settings(app_settings)
     try:
         request = build_conversion_request(book)

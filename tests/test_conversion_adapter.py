@@ -60,6 +60,28 @@ def test_folder_book_builds_request_with_all_file_paths():
     assert request.dramatic_audio is True
 
 
+def test_folder_book_request_sorts_tracks_by_metadata_then_filename_guess():
+    book = Book(
+        "folder-key",
+        "/library/Folder Book",
+        True,
+        [
+            AudioFileMetadata("/library/Folder Book/10.mp3", title="Ten", track=None, target_bitrate=48, target_channels=2),
+            AudioFileMetadata("/library/Folder Book/02.mp3", title="Two", track=2, target_bitrate=48, target_channels=2),
+            AudioFileMetadata("/library/Folder Book/01.mp3", title="One", track=1, target_bitrate=48, target_channels=2),
+        ],
+    )
+
+    request = build_conversion_request(book)
+
+    assert request.files == (
+        Path("/library/Folder Book/01.mp3"),
+        Path("/library/Folder Book/02.mp3"),
+        Path("/library/Folder Book/10.mp3"),
+    )
+    assert [track.title for track in request.tracks] == ["One", "Two", "Ten"]
+
+
 def test_missing_target_values_normalize_to_none():
     book = Book(
         "missing-targets",
