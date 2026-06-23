@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-APP_SOURCE = Path('metadata_collector/app.py').read_text()
+APP_SOURCE = Path('metadata_collector/app.py').read_text(encoding='utf-8')
 
 def _book_top_row_source():
     return APP_SOURCE.split('        def book_top_row(book, first):', 1)[1].split('        def book_actions_row(book):', 1)[0]

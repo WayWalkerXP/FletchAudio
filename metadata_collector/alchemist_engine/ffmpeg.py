@@ -5,14 +5,17 @@ import json
 import logging
 import os
 import signal
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .constants import ACTIVE_EXTERNAL_PROCESSES, EXTERNAL_PROCESS_LOCK, METADATA_KEYS
-from .errors import ProbeError
+from .errors import ExternalToolError, ProbeError
 from .models import ArtworkStream, AudioInfo
+
+LOGGER = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class CommandResult:
@@ -24,13 +27,43 @@ class CommandResult:
 
 def run_external_command(command: list[str]) -> CommandResult:
     """Run an external command and decode captured output without UnicodeDecodeError."""
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=(os.name != "nt"),
-    )
+    if not command:
+        raise ExternalToolError("External command is empty")
+
+    executable = command[0]
+    resolved_executable = shutil.which(executable)
+    LOGGER.info("External command executable=%s resolved=%s cwd=%s", executable, resolved_executable, os.getcwd())
+    LOGGER.info("External command argv=%r", command)
+    if resolved_executable is None:
+        message = _missing_executable_message(executable)
+        LOGGER.error(
+            "%s executable not found before subprocess execution: executable=%s resolved=%s command=%r cwd=%s",
+            executable,
+            executable,
+            resolved_executable,
+            command,
+            os.getcwd(),
+        )
+        raise ExternalToolError(message)
+
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=(os.name != "nt"),
+        )
+    except FileNotFoundError as exc:
+        LOGGER.error(
+            "External command launch failed: executable=%s resolved=%s command=%r cwd=%s original_exception=%r",
+            executable,
+            resolved_executable,
+            command,
+            os.getcwd(),
+            exc,
+        )
+        raise ExternalToolError(_missing_executable_message(executable)) from exc
     with EXTERNAL_PROCESS_LOCK:
         ACTIVE_EXTERNAL_PROCESSES.add(process)
     try:
@@ -44,6 +77,14 @@ def run_external_command(command: list[str]) -> CommandResult:
     stdout_text = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
     stderr_text = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
     return CommandResult(command, process.returncode, stdout_text, stderr_text)
+
+def _missing_executable_message(executable: str) -> str:
+    normalized = Path(executable).name.casefold()
+    if normalized in {"ffmpeg", "ffmpeg.exe"}:
+        return "FFmpeg executable not found. Install FFmpeg or configure its path before converting."
+    if normalized in {"ffprobe", "ffprobe.exe"}:
+        return "FFprobe executable not found. Install FFmpeg or configure its path before converting."
+    return f"Required executable not found: {executable}"
 
 def terminate_external_process(process: subprocess.Popen[bytes]) -> None:
     """Best-effort termination for an in-flight external command."""
@@ -108,9 +149,19 @@ class FFmpegAnalyzer:
         channels = self._safe_int(audio_stream.get("channels"), default=0)
         if channels <= 0:
             raise ProbeError("channel count could not be determined")
-        duration_seconds = self._extract_duration(data, audio_stream)
+        duration_seconds, audio_duration, format_duration, duration_source = self._extract_duration(data, audio_stream, path)
         if duration_seconds <= 0:
             raise ProbeError("duration could not be determined")
+        stream_summary = self._stream_summary(data)
+        LOGGER.info(
+            "ffprobe duration details path=%s audio_duration=%s format_duration=%s used_duration=%s duration_source=%s streams=%s",
+            path,
+            audio_duration,
+            format_duration,
+            duration_seconds,
+            duration_source,
+            stream_summary,
+        )
         return AudioInfo(
             path=path,
             bitrate_bps=bitrate_bps,
@@ -120,6 +171,10 @@ class FFmpegAnalyzer:
             chapter_count=len(data.get("chapters", [])),
             metadata=self._extract_metadata(data, audio_stream),
             artwork_stream=self._select_artwork_stream(data),
+            audio_duration_seconds=audio_duration,
+            format_duration_seconds=format_duration,
+            duration_source=duration_source,
+            stream_summary=stream_summary,
         )
 
     def _primary_audio_stream(self, data: dict[str, Any]) -> dict[str, Any] | None:
@@ -135,15 +190,48 @@ class FFmpegAnalyzer:
                 return bitrate
         return None
 
-    def _extract_duration(self, data: dict[str, Any], audio_stream: dict[str, Any]) -> float:
-        for value in (audio_stream.get("duration"), data.get("format", {}).get("duration")):
-            try:
-                duration = float(value)
-            except (TypeError, ValueError):
-                continue
-            if duration > 0:
-                return duration
-        return 0.0
+    def _extract_duration(
+        self,
+        data: dict[str, Any],
+        audio_stream: dict[str, Any],
+        path: Path,
+    ) -> tuple[float, float | None, float | None, str]:
+        audio_duration = self._safe_float(audio_stream.get("duration"))
+        format_duration = self._safe_float(data.get("format", {}).get("duration"))
+        if audio_duration is not None and audio_duration > 0:
+            return audio_duration, audio_duration, format_duration, "audio"
+        if format_duration is not None and format_duration > 0:
+            LOGGER.warning(
+                "ffprobe audio duration missing; falling back to format duration path=%s format_duration=%s streams=%s",
+                path,
+                format_duration,
+                self._stream_summary(data),
+            )
+            return format_duration, audio_duration, format_duration, "format"
+        return 0.0, audio_duration, format_duration, "unavailable"
+
+    def _stream_summary(self, data: dict[str, Any]) -> tuple[str, ...]:
+        summaries: list[str] = []
+        for stream in data.get("streams", []):
+            disposition = stream.get("disposition", {}) or {}
+            attached_pic = self._safe_int(disposition.get("attached_pic"), default=0)
+            summaries.append(
+                (
+                    f"index={stream.get('index')} "
+                    f"type={stream.get('codec_type')} "
+                    f"codec={stream.get('codec_name')} "
+                    f"duration={stream.get('duration')} "
+                    f"attached_pic={attached_pic}"
+                )
+            )
+        return tuple(summaries)
+
+    def _safe_float(self, value: Any) -> float | None:
+        try:
+            duration = float(value)
+        except (TypeError, ValueError):
+            return None
+        return duration if duration > 0 else None
 
     def _extract_metadata(self, data: dict[str, Any], audio_stream: dict[str, Any]) -> dict[str, str]:
         metadata: dict[str, str] = {}
@@ -199,4 +287,23 @@ class FFmpegAnalyzer:
 
 def build_ffmpeg_command(input_path: Path, output_path: Path, codec: str, bitrate_kbps: int, channels: int) -> list[str]:
     """Build the single-file conversion command used by the converter."""
-    return ["ffmpeg", "-hide_banner", "-y", "-i", str(input_path), "-map", "0", "-c:a", codec, "-b:a", f"{bitrate_kbps}k", "-ac", str(channels), "-c:v", "copy", "-map_chapters", "0", str(output_path)]
+    return [
+        "ffmpeg",
+        "-hide_banner",
+        "-y",
+        "-i",
+        str(input_path),
+        "-map",
+        "0:a:0",
+        "-c:a",
+        codec,
+        "-b:a",
+        f"{bitrate_kbps}k",
+        "-ac",
+        str(channels),
+        "-map_chapters",
+        "0",
+        "-map_metadata",
+        "0",
+        str(output_path),
+    ]

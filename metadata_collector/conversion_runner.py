@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import errno
+import logging
 import os
 import shutil
 from dataclasses import dataclass
@@ -17,9 +18,13 @@ from .alchemist_engine.ffmpeg import (
 )
 from .alchemist_engine.models import AudioInfo, ConversionPlan
 from .alchemist_engine.validation import ValidationManager
-from .audio_tags import write_audio_metadata
+from .audio_tags import copy_embedded_cover_art, write_audio_metadata
 from .conversion_adapter import ConversionRequest, ConversionSettings
+from .conversion_archive import archive_source_file
 from .conversion_planner import ConversionPlanResult, plan_conversion
+
+LOGGER = logging.getLogger(__name__)
+MAX_USER_FACING_ERROR_DETAILS = 1200
 
 
 class ConversionStatus(str, Enum):
@@ -77,6 +82,8 @@ class Validator(Protocol):
 ProgressCallback = Callable[[ConversionProgressEvent], None]
 CommandRunner = Callable[[list[str]], CommandResult]
 MetadataWriter = Callable[[str, dict], None]
+CoverCopier = Callable[[str, str], bool]
+ArchiveMover = Callable[[Path, Path], Path]
 
 
 class ConversionRunner:
@@ -90,12 +97,16 @@ class ConversionRunner:
         validator: Validator | None = None,
         command_runner: CommandRunner = run_external_command,
         metadata_writer: MetadataWriter = write_audio_metadata,
+        cover_copier: CoverCopier = copy_embedded_cover_art,
+        archive_mover: ArchiveMover = archive_source_file,
     ) -> None:
         self.settings = settings
         self.analyzer = analyzer or FFmpegAnalyzer()
         self.validator = validator or ValidationManager(self.analyzer)
         self.command_runner = command_runner
         self.metadata_writer = metadata_writer
+        self.cover_copier = cover_copier
+        self.archive_mover = archive_mover
 
     def run(
         self,
@@ -103,6 +114,8 @@ class ConversionRunner:
         progress_callback: ProgressCallback | None = None,
     ) -> ConversionResult:
         self._emit(progress_callback, ConversionStage.PLANNING, "Planning conversion", request.source_path)
+        if self.settings.archive_original and self.settings.processed_dir is not None:
+            LOGGER.info("Archive directory configured: %s", self.settings.processed_dir)
 
         if request.is_folder_book:
             return self._failure(
@@ -141,7 +154,15 @@ class ConversionRunner:
         temporary_path = engine_plan.temporary_path
 
         try:
+            self._validate_execution_paths(request.source_path, temporary_path, engine_plan.final_path)
             self._emit_from_plan(progress_callback, ConversionStage.PROBING, "Probing source", plan_result)
+            LOGGER.info(
+                "Conversion probing source=%s destination=%s temporary=%s ffprobe=%s",
+                request.source_path,
+                engine_plan.final_path,
+                temporary_path,
+                shutil.which("ffprobe"),
+            )
             source_info = self.analyzer.probe(request.source_path)
 
             self._emit_from_plan(progress_callback, ConversionStage.CONVERTING, "Converting audio", plan_result)
@@ -152,8 +173,26 @@ class ConversionRunner:
                 engine_plan.target_bitrate_kbps,
                 engine_plan.output_channels,
             )
+            LOGGER.info(
+                "Conversion command source=%s destination=%s temporary=%s executable=%s resolved=%s command=%r",
+                request.source_path,
+                engine_plan.final_path,
+                temporary_path,
+                command[0] if command else None,
+                shutil.which(command[0]) if command else None,
+                command,
+            )
             command_result = self.command_runner(command)
             if command_result.returncode != 0:
+                LOGGER.error(
+                    "Conversion command failed source=%s destination=%s executable=%s resolved=%s returncode=%s stderr=%r",
+                    request.source_path,
+                    engine_plan.final_path,
+                    command[0] if command else None,
+                    shutil.which(command[0]) if command else None,
+                    command_result.returncode,
+                    command_result.stderr,
+                )
                 details = command_result.stderr.strip() or f"FFmpeg exited with code {command_result.returncode}"
                 raise RuntimeError(details)
 
@@ -168,33 +207,74 @@ class ConversionRunner:
                 plan_result,
             )
             self.metadata_writer(str(temporary_path), dict(plan_result.metadata_summary))
+            try:
+                copied_cover = self.cover_copier(str(request.source_path), str(temporary_path))
+                LOGGER.info(
+                    "Conversion embedded cover copy source=%s temporary=%s copied=%s",
+                    request.source_path,
+                    temporary_path,
+                    copied_cover,
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "Conversion embedded cover copy failed source=%s temporary=%s original_exception=%r",
+                    request.source_path,
+                    temporary_path,
+                    exc,
+                )
 
             self._emit_from_plan(progress_callback, ConversionStage.PROMOTING, "Promoting converted output", plan_result)
             _promote_without_overwrite(temporary_path, engine_plan.final_path)
 
             archived_path: Path | None = None
+            message = "Conversion completed successfully"
+            archive_warning: str | None = None
             if self.settings.archive_original and plan_result.archive_path is not None:
                 self._emit_from_plan(progress_callback, ConversionStage.ARCHIVING, "Archiving original source", plan_result)
-                _move_without_overwrite(request.source_path, plan_result.archive_path)
-                archived_path = plan_result.archive_path
+                try:
+                    archived_path = self.archive_mover(request.source_path, plan_result.archive_path.parent)
+                    LOGGER.info(
+                        "Archived original file:\n%s -> %s",
+                        request.source_path,
+                        archived_path,
+                    )
+                except Exception as exc:
+                    archive_warning = (
+                        "Conversion completed successfully, but the original file "
+                        "could not be moved to the Archive Directory."
+                    )
+                    message = archive_warning
+                    LOGGER.error(
+                        "Failed to archive original file:\n%s\nReason: %r",
+                        request.source_path,
+                        exc,
+                    )
 
             self._emit_from_plan(progress_callback, ConversionStage.COMPLETE, "Conversion complete", plan_result)
             return ConversionResult(
                 status=ConversionStatus.SUCCESS,
-                message="Conversion completed successfully",
+                message=message,
                 source_path=request.source_path,
                 temporary_output_path=temporary_path,
                 final_output_path=engine_plan.final_path,
                 archived_path=archived_path,
+                error_details=archive_warning,
             )
         except Exception as exc:
+            LOGGER.error(
+                "Conversion failed source=%s destination=%s temporary=%s original_exception=%r",
+                request.source_path,
+                engine_plan.final_path,
+                temporary_path,
+                exc,
+            )
             _remove_temporary_output(temporary_path)
             return self._failure(
                 request.source_path,
                 "Conversion failed",
                 progress_callback,
                 plan_result=plan_result,
-                error_details=str(exc),
+                error_details=_user_facing_error_details(str(exc)),
             )
 
     @staticmethod
@@ -245,6 +325,19 @@ class ConversionRunner:
             final_output_path=final_path,
             error_details=error_details,
         )
+
+    @staticmethod
+    def _validate_execution_paths(source_path: Path, temporary_path: Path, final_path: Path) -> None:
+        if not source_path.exists():
+            raise FileNotFoundError(f"Source file does not exist: {source_path}")
+        if not source_path.is_file():
+            raise FileNotFoundError(f"Source path is not a file: {source_path}")
+        for label, path in (("temporary output", temporary_path), ("destination", final_path)):
+            parent = path.parent
+            if not parent.exists():
+                raise FileNotFoundError(f"{label} directory does not exist: {parent}")
+            if not parent.is_dir():
+                raise NotADirectoryError(f"{label} parent is not a directory: {parent}")
 
     @staticmethod
     def _emit_from_plan(
@@ -298,6 +391,12 @@ def run_conversion(
 
 
 execute_conversion = run_conversion
+
+
+def _user_facing_error_details(details: str) -> str:
+    if len(details) <= MAX_USER_FACING_ERROR_DETAILS:
+        return details
+    return f"{details[:MAX_USER_FACING_ERROR_DETAILS].rstrip()}… See logs for full details."
 
 
 def _promote_without_overwrite(temporary_path: Path, final_path: Path) -> None:

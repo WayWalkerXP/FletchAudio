@@ -9,6 +9,9 @@ class LockError(Exception):
 class ProbeError(Exception):
     """Raised when ffprobe cannot read or describe a media file."""
 
+class ExternalToolError(Exception):
+    """Raised when an external media tool cannot be launched."""
+
 class DiskSpaceError(Exception):
     """Raised when a file transaction detects disk-space exhaustion."""
 

@@ -154,7 +154,10 @@ class ConversionPlanner:
         if not request.book_key.strip():
             errors.append("book key is required")
         if not request.source_path.exists():
-            errors.append(f"source path does not exist: {request.source_path}")
+            if request.is_folder_book:
+                errors.append(f"source folder does not exist: {request.source_path}")
+            else:
+                errors.append(f"Source file does not exist: {request.source_path}")
         elif request.is_folder_book and not request.source_path.is_dir():
             errors.append(f"folder-book source path is not a directory: {request.source_path}")
         elif not request.is_folder_book and not request.source_path.is_file():
@@ -170,7 +173,7 @@ class ConversionPlanner:
         if self.settings.temp_dir is not None:
             self._validate_directory(self.settings.temp_dir, "temporary output", errors)
         if self.settings.archive_original and self.settings.processed_dir is not None:
-            self._validate_directory(self.settings.processed_dir, "processed", errors)
+            self._validate_archive_directory(self.settings.processed_dir, errors)
 
     def _validate_targets(
         self, request: ConversionRequest, errors: list[str]
@@ -199,6 +202,11 @@ class ConversionPlanner:
         elif not path.is_dir():
             errors.append(f"{label} directory is not a directory: {path}")
 
+    @staticmethod
+    def _validate_archive_directory(path: Path, errors: list[str]) -> None:
+        if path.exists() and not path.is_dir():
+            errors.append(f"archive directory is not a directory: {path}")
+
     def _output_directory_is_usable(self) -> bool:
         output_dir = self.settings.output_dir
         return output_dir is not None and output_dir.is_dir()
@@ -223,7 +231,7 @@ class ConversionPlanner:
                 continue
             if path in source_paths:
                 errors.append(f"{label} path conflicts with a source path: {path}")
-            if path.exists():
+            if path.exists() and label != "archive":
                 warnings.append(f"{label} destination already exists: {path}")
                 errors.append(f"{label} destination conflict: {path}")
 

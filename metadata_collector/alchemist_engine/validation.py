@@ -9,6 +9,8 @@ from .errors import ProbeError
 from .ffmpeg import FFmpegAnalyzer
 from .models import AudioInfo, ConversionPlan
 
+LOGGER = logging.getLogger(__name__)
+
 class ValidationManager:
     """Validate converted M4B files before originals are archived."""
     BITRATE_TOLERANCE_RATIO = 0.20
@@ -34,6 +36,7 @@ class ValidationManager:
         if not self._bitrate_matches(output_info.bitrate_bps, plan.target_bitrate_kbps * 1000):
             logging.error("Validation failed; expected approximately %s kbps, found %s kbps", plan.target_bitrate_kbps, output_info.bitrate_kbps)
             return False
+        self._log_duration_diagnostics(source_info, output_info)
         if not self._duration_matches(source_info.duration_seconds, output_info.duration_seconds):
             logging.error("Validation failed; source duration %.2fs differs from output duration %.2fs", source_info.duration_seconds, output_info.duration_seconds)
             return False
@@ -56,6 +59,22 @@ class ValidationManager:
         for key, source_value in source_info.metadata.items():
             if source_value and not output_info.metadata.get(key):
                 logging.warning("Metadata appears missing in output: %s", key)
+
+    def _log_duration_diagnostics(self, source_info: AudioInfo, output_info: AudioInfo) -> None:
+        LOGGER.info(
+            "Validation duration diagnostics source=%s source_audio_duration=%s source_format_duration=%s source_used_duration=%s source_duration_source=%s output=%s output_audio_duration=%s output_format_duration=%s output_used_duration=%s output_duration_source=%s output_streams=%s",
+            source_info.path,
+            source_info.audio_duration_seconds,
+            source_info.format_duration_seconds,
+            source_info.duration_seconds,
+            source_info.duration_source,
+            output_info.path,
+            output_info.audio_duration_seconds,
+            output_info.format_duration_seconds,
+            output_info.duration_seconds,
+            output_info.duration_source,
+            output_info.stream_summary,
+        )
 
 def validate_target_bitrate(value: int | None) -> bool:
     """Return True when an explicit target bitrate is allowed by current rules."""

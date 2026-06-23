@@ -1,6 +1,7 @@
 from __future__ import annotations
 import ast
 import base64
+import logging
 import re
 import requests
 
@@ -11,6 +12,7 @@ from .models import AudioFileMetadata
 
 NON_WRITABLE_FIELDS = {'duration', 'has_cover', 'cover_data_uri'}
 BOOLEAN_FIELDS = {'explicit', 'dramatic_audio'}
+LOGGER = logging.getLogger(__name__)
 
 
 def format_genres_for_tag(genres) -> str | None:
@@ -257,3 +259,42 @@ def write_audio_metadata(path: str, updates: dict):
             elif k=='description': tags.setall('COMM',[COMM(encoding=3, lang='XXX', desc='', text=str(v))])
             else: tags.setall(f'TXXX:{k.upper()}', [TXXX(encoding=3, desc=k.upper(), text=[str(v)])])
     audio.save()
+
+def copy_embedded_cover_art(source_path: str, destination_path: str) -> bool:
+    """Copy embedded source cover art into an MP4/M4B destination as a covr tag."""
+    source = File(str(source_path), easy=False)
+    destination = File(str(destination_path), easy=False)
+    if source is None or destination is None:
+        LOGGER.info("Cover copy skipped; unsupported source or destination source=%s destination=%s", source_path, destination_path)
+        return False
+    if not isinstance(destination, MP4):
+        LOGGER.info("Cover copy skipped; destination is not MP4/M4B: %s", destination_path)
+        return False
+
+    cover = _embedded_cover_for_mp4(source)
+    if cover is None:
+        LOGGER.info("Cover copy skipped; source has no supported embedded cover: %s", source_path)
+        return False
+
+    tags = destination.tags or {}
+    destination.tags = tags
+    tags['covr'] = [cover]
+    destination.save()
+    LOGGER.info("Copied embedded cover art source=%s destination=%s", source_path, destination_path)
+    return True
+
+def _embedded_cover_for_mp4(source):
+    tags = source.tags or {}
+    if isinstance(source, MP4):
+        covers = tags.get('covr') or []
+        if covers:
+            return covers[0]
+        return None
+
+    frames = tags.getall('APIC') if hasattr(tags, 'getall') else []
+    for frame in frames:
+        data = getattr(frame, 'data', None)
+        if data:
+            mime_type = getattr(frame, 'mime', None) or _mime_from_image_data(data)
+            return MP4Cover(data, imageformat=_cover_format(mime_type))
+    return None
