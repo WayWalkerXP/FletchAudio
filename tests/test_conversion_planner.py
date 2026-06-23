@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from metadata_collector.conversion_adapter import ConversionRequest, ConversionSettings
+from metadata_collector.conversion_adapter import ConversionRequest, ConversionSettings, ConversionTrack
 from metadata_collector.conversion_planner import plan_conversion, plan_conversions
 
 
@@ -15,6 +15,7 @@ def make_request(
     metadata: dict[str, str] | None = None,
     target_bitrate: int | None = 64,
     target_channels: int | None = 1,
+    tracks: tuple[ConversionTrack, ...] = (),
 ) -> ConversionRequest:
     return ConversionRequest(
         book_key="book-key",
@@ -25,6 +26,7 @@ def make_request(
         target_channels=target_channels,
         dramatic_audio=False,
         metadata=metadata or {"author": "Author Name", "album": "Book Title"},
+        tracks=tracks,
     )
 
 
@@ -46,10 +48,10 @@ def test_single_file_planning_generates_expected_output_path(tmp_path):
     assert result.selected_codec == "libfdk_aac"
 
 
-def test_folder_book_planning_preserves_all_input_order(tmp_path):
+def test_folder_book_planning_sorts_all_inputs_deterministically(tmp_path):
     source = tmp_path / "book"
     source.mkdir()
-    tracks = (source / "01.mp3", source / "02.mp3", source / "03.mp3")
+    tracks = (source / "03.mp3", source / "01.mp3", source / "02.mp3")
     for track in tracks:
         track.write_bytes(b"track")
     output_dir = tmp_path / "output"
@@ -62,8 +64,56 @@ def test_folder_book_planning_preserves_all_input_order(tmp_path):
 
     assert result.status == "planned"
     assert result.is_folder_book is True
-    assert result.input_paths == tracks
-    assert not any("ordering is uncertain" in warning for warning in result.warnings)
+    assert result.input_paths == (source / "01.mp3", source / "02.mp3", source / "03.mp3")
+    assert not any("ordering is ambiguous" in warning for warning in result.warnings)
+
+
+def test_folder_book_planning_chapter_labels_use_title_then_filename(tmp_path):
+    source = tmp_path / "book"
+    source.mkdir()
+    first = source / "01 - Opening.mp3"
+    second = source / "02 - The Road.mp3"
+    first.write_bytes(b"track")
+    second.write_bytes(b"track")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    result = plan_conversion(
+        make_request(
+            source,
+            files=(second, first),
+            is_folder_book=True,
+            tracks=(
+                ConversionTrack(second, None, 2, None, 30),
+                ConversionTrack(first, "Custom Opening", 1, None, 10),
+            ),
+        ),
+        ConversionSettings(output_dir=output_dir),
+    )
+
+    assert result.status == "planned"
+    assert result.chapter_titles == ("Custom Opening", "The Road")
+    assert result.chapter_start_seconds == (0.0, 10.0)
+
+
+def test_folder_book_planning_warns_when_ordering_is_ambiguous(tmp_path):
+    source = tmp_path / "book"
+    source.mkdir()
+    first = source / "alpha.mp3"
+    second = source / "beta.mp3"
+    first.write_bytes(b"track")
+    second.write_bytes(b"track")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    result = plan_conversion(
+        make_request(source, files=(second, first), is_folder_book=True),
+        ConversionSettings(output_dir=output_dir),
+    )
+
+    assert result.status == "planned"
+    assert result.input_paths == (first, second)
+    assert any("ordering is ambiguous" in warning for warning in result.warnings)
 
 
 def test_missing_output_directory_is_invalid(tmp_path):

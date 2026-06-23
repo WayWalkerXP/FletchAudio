@@ -1,4 +1,4 @@
-"""Execution service for planned single-file audiobook conversions."""
+"""Execution service for planned audiobook conversions."""
 from __future__ import annotations
 
 import errno
@@ -13,6 +13,7 @@ from typing import Callable, Protocol
 from .alchemist_engine.ffmpeg import (
     CommandResult,
     FFmpegAnalyzer,
+    build_ffmpeg_concat_command,
     build_ffmpeg_command,
     run_external_command,
 )
@@ -117,14 +118,6 @@ class ConversionRunner:
         if self.settings.archive_original and self.settings.processed_dir is not None:
             LOGGER.info("Archive directory configured: %s", self.settings.processed_dir)
 
-        if request.is_folder_book:
-            return self._failure(
-                request.source_path,
-                "Folder-book conversion is not supported",
-                progress_callback,
-                status=ConversionStatus.UNSUPPORTED,
-            )
-
         plan_result = plan_conversion(request, self.settings)
         if plan_result.status != "planned":
             details = "; ".join(plan_result.errors) or "conversion plan is not executable"
@@ -152,9 +145,10 @@ class ConversionRunner:
 
         engine_plan = self._engine_plan(plan_result)
         temporary_path = engine_plan.temporary_path
+        sidecar_paths: list[Path] = []
 
         try:
-            self._validate_execution_paths(request.source_path, temporary_path, engine_plan.final_path)
+            self._validate_execution_paths(request, temporary_path, engine_plan.final_path)
             self._emit_from_plan(progress_callback, ConversionStage.PROBING, "Probing source", plan_result)
             LOGGER.info(
                 "Conversion probing source=%s destination=%s temporary=%s ffprobe=%s",
@@ -163,16 +157,33 @@ class ConversionRunner:
                 temporary_path,
                 shutil.which("ffprobe"),
             )
-            source_info = self.analyzer.probe(request.source_path)
+            source_info, track_infos = self._probe_source(request, plan_result)
 
             self._emit_from_plan(progress_callback, ConversionStage.CONVERTING, "Converting audio", plan_result)
-            command = build_ffmpeg_command(
-                request.source_path,
-                temporary_path,
-                engine_plan.codec,
-                engine_plan.target_bitrate_kbps,
-                engine_plan.output_channels,
-            )
+            if request.is_folder_book:
+                concat_file, metadata_file = _write_folder_sidecars(
+                    plan_result,
+                    track_infos,
+                    temporary_path.parent,
+                    engine_plan.output_metadata,
+                )
+                sidecar_paths.extend((concat_file, metadata_file))
+                command = build_ffmpeg_concat_command(
+                    concat_file,
+                    metadata_file,
+                    temporary_path,
+                    engine_plan.codec,
+                    engine_plan.target_bitrate_kbps,
+                    engine_plan.output_channels,
+                )
+            else:
+                command = build_ffmpeg_command(
+                    request.source_path,
+                    temporary_path,
+                    engine_plan.codec,
+                    engine_plan.target_bitrate_kbps,
+                    engine_plan.output_channels,
+                )
             LOGGER.info(
                 "Conversion command source=%s destination=%s temporary=%s executable=%s resolved=%s command=%r",
                 request.source_path,
@@ -208,10 +219,11 @@ class ConversionRunner:
             )
             self.metadata_writer(str(temporary_path), dict(plan_result.metadata_summary))
             try:
-                copied_cover = self.cover_copier(str(request.source_path), str(temporary_path))
+                cover_source = str(plan_result.input_paths[0] if request.is_folder_book else request.source_path)
+                copied_cover = self.cover_copier(cover_source, str(temporary_path))
                 LOGGER.info(
                     "Conversion embedded cover copy source=%s temporary=%s copied=%s",
-                    request.source_path,
+                    cover_source,
                     temporary_path,
                     copied_cover,
                 )
@@ -234,23 +246,24 @@ class ConversionRunner:
                 try:
                     archived_path = self.archive_mover(request.source_path, plan_result.archive_path.parent)
                     LOGGER.info(
-                        "Archived original file:\n%s -> %s",
+                        "Archived original source:\n%s -> %s",
                         request.source_path,
                         archived_path,
                     )
                 except Exception as exc:
                     archive_warning = (
-                        "Conversion completed successfully, but the original file "
+                        "Conversion completed successfully, but the original source "
                         "could not be moved to the Archive Directory."
                     )
                     message = archive_warning
                     LOGGER.error(
-                        "Failed to archive original file:\n%s\nReason: %r",
+                        "Failed to archive original source:\n%s\nReason: %r",
                         request.source_path,
                         exc,
                     )
 
             self._emit_from_plan(progress_callback, ConversionStage.COMPLETE, "Conversion complete", plan_result)
+            _remove_sidecars(sidecar_paths)
             return ConversionResult(
                 status=ConversionStatus.SUCCESS,
                 message=message,
@@ -269,6 +282,7 @@ class ConversionRunner:
                 exc,
             )
             _remove_temporary_output(temporary_path)
+            _remove_sidecars(sidecar_paths)
             return self._failure(
                 request.source_path,
                 "Conversion failed",
@@ -327,17 +341,58 @@ class ConversionRunner:
         )
 
     @staticmethod
-    def _validate_execution_paths(source_path: Path, temporary_path: Path, final_path: Path) -> None:
+    def _validate_execution_paths(request: ConversionRequest, temporary_path: Path, final_path: Path) -> None:
+        source_path = request.source_path
         if not source_path.exists():
-            raise FileNotFoundError(f"Source file does not exist: {source_path}")
-        if not source_path.is_file():
+            label = "folder" if request.is_folder_book else "file"
+            raise FileNotFoundError(f"Source {label} does not exist: {source_path}")
+        if request.is_folder_book:
+            if not source_path.is_dir():
+                raise FileNotFoundError(f"Source path is not a folder: {source_path}")
+        elif not source_path.is_file():
             raise FileNotFoundError(f"Source path is not a file: {source_path}")
+        for input_path in request.files:
+            if not input_path.is_file():
+                raise FileNotFoundError(f"Input file does not exist: {input_path}")
         for label, path in (("temporary output", temporary_path), ("destination", final_path)):
             parent = path.parent
             if not parent.exists():
                 raise FileNotFoundError(f"{label} directory does not exist: {parent}")
             if not parent.is_dir():
                 raise NotADirectoryError(f"{label} parent is not a directory: {parent}")
+
+    def _probe_source(
+        self,
+        request: ConversionRequest,
+        plan_result: ConversionPlanResult,
+    ) -> tuple[AudioInfo, tuple[AudioInfo, ...]]:
+        if not request.is_folder_book:
+            source_info = self.analyzer.probe(request.source_path)
+            return source_info, (source_info,)
+        track_infos = tuple(self.analyzer.probe(path) for path in plan_result.input_paths)
+        if not track_infos:
+            raise RuntimeError("folder-book has no readable audio tracks")
+        first_info = track_infos[0]
+        duration = sum(info.duration_seconds for info in track_infos)
+        return (
+            AudioInfo(
+                path=request.source_path,
+                bitrate_bps=first_info.bitrate_bps,
+                channels=first_info.channels,
+                codec=first_info.codec,
+                duration_seconds=duration,
+                chapter_count=len(track_infos),
+                metadata=dict(plan_result.metadata_summary),
+                audio_duration_seconds=duration,
+                format_duration_seconds=duration,
+                duration_source="folder-track-sum",
+                stream_summary=tuple(
+                    f"{info.path.name}: duration={info.duration_seconds} codec={info.codec}"
+                    for info in track_infos
+                ),
+            ),
+            track_infos,
+        )
 
     @staticmethod
     def _emit_from_plan(
@@ -430,3 +485,71 @@ def _remove_temporary_output(path: Path) -> None:
         path.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def _remove_sidecars(paths: list[Path]) -> None:
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _write_folder_sidecars(
+    plan: ConversionPlanResult,
+    track_infos: tuple[AudioInfo, ...],
+    temp_dir: Path,
+    metadata: dict[str, str],
+) -> tuple[Path, Path]:
+    base_name = plan.temporary_output_path.stem if plan.temporary_output_path else plan.source_path.name
+    concat_file = temp_dir / f"{base_name}.concat.txt"
+    metadata_file = temp_dir / f"{base_name}.ffmetadata.txt"
+    concat_file.write_text(
+        "".join(f"file '{_ffconcat_escape(path)}'\n" for path in plan.input_paths),
+        encoding="utf-8",
+    )
+    metadata_file.write_text(
+        _ffmetadata_text(plan, track_infos, metadata),
+        encoding="utf-8",
+    )
+    return concat_file, metadata_file
+
+
+def _ffconcat_escape(path: Path) -> str:
+    return str(path.resolve()).replace("\\", "\\\\").replace("'", "'\\''")
+
+
+def _ffmetadata_text(
+    plan: ConversionPlanResult,
+    track_infos: tuple[AudioInfo, ...],
+    metadata: dict[str, str],
+) -> str:
+    lines = [";FFMETADATA1"]
+    for key, value in metadata.items():
+        if value:
+            lines.append(f"{_ffmetadata_escape(str(key))}={_ffmetadata_escape(str(value))}")
+    elapsed_ms = 0
+    for index, info in enumerate(track_infos):
+        duration_ms = max(1, round(info.duration_seconds * 1000))
+        title = plan.chapter_titles[index] if index < len(plan.chapter_titles) else plan.input_paths[index].stem
+        lines.extend(
+            [
+                "[CHAPTER]",
+                "TIMEBASE=1/1000",
+                f"START={elapsed_ms}",
+                f"END={elapsed_ms + duration_ms}",
+                f"title={_ffmetadata_escape(title)}",
+            ]
+        )
+        elapsed_ms += duration_ms
+    return "\n".join(lines) + "\n"
+
+
+def _ffmetadata_escape(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace("=", "\\=")
+        .replace(";", "\\;")
+        .replace("#", "\\#")
+        .replace("\n", "\\n")
+    )

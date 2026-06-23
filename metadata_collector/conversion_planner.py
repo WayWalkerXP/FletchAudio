@@ -1,16 +1,17 @@
 """Read-only conversion planning for FletchAudio conversion requests."""
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Literal
 
 from .alchemist_engine.filesystem import sanitize_filename
 from .alchemist_engine.metadata import build_output_tags, first_tag_value
+from .mass_update import guess_title_from_filename, guess_track_number_from_filename, track_sort_key
 from .conversion_adapter import (
     VALID_TARGET_BITRATES,
     VALID_TARGET_CHANNELS,
+    ConversionTrack,
     ConversionRequest,
     ConversionSettings,
 )
@@ -37,6 +38,8 @@ class ConversionPlanResult:
     warnings: tuple[str, ...]
     errors: tuple[str, ...]
     status: PlanStatus
+    chapter_titles: tuple[str, ...] = ()
+    chapter_start_seconds: tuple[float, ...] = ()
 
 
 class ConversionPlanner:
@@ -85,6 +88,9 @@ class ConversionPlanner:
         if self.settings.archive_original and self.settings.processed_dir is not None:
             archive_path = self.settings.processed_dir / request.source_path.name
 
+        ordered_tracks = _ordered_tracks(request)
+        input_paths = tuple(track.path for track in ordered_tracks)
+
         self._detect_conflicts(
             request,
             output_path,
@@ -93,10 +99,17 @@ class ConversionPlanner:
             warnings,
             errors,
         )
-        if request.is_folder_book and not _has_certain_track_order(request.files):
-            warnings.append(
-                "folder track order is preserved from the request, but filename-based ordering is uncertain"
-            )
+        chapter_titles: tuple[str, ...] = ()
+        chapter_starts: tuple[float, ...] = ()
+        if request.is_folder_book:
+            if not _has_certain_track_order(ordered_tracks):
+                warnings.append(
+                    "folder track ordering is ambiguous; files were sorted deterministically by disc, track tag, filename track number, then filename"
+                )
+            chapter_titles = tuple(_chapter_title(track) for track in ordered_tracks)
+            chapter_starts, duration_warning = _chapter_starts_from_track_durations(ordered_tracks)
+            if duration_warning:
+                warnings.append(duration_warning)
 
         metadata_summary = (
             build_output_tags(
@@ -111,7 +124,7 @@ class ConversionPlanner:
         return ConversionPlanResult(
             book_key=request.book_key,
             source_path=request.source_path,
-            input_paths=request.files,
+            input_paths=input_paths,
             is_folder_book=request.is_folder_book,
             output_path=output_path,
             temporary_output_path=temporary_path,
@@ -124,6 +137,8 @@ class ConversionPlanner:
             warnings=tuple(warnings),
             errors=tuple(errors),
             status="invalid" if errors else "planned",
+            chapter_titles=chapter_titles,
+            chapter_start_seconds=chapter_starts,
         )
 
     def plan_many(
@@ -250,16 +265,56 @@ def plan_conversions(
     return ConversionPlanner(settings).plan_many(requests)
 
 
-_LEADING_TRACK_NUMBER = re.compile(r"^\s*(\d+)")
+def _ordered_tracks(request: ConversionRequest) -> tuple[ConversionTrack, ...]:
+    tracks = request.tracks or tuple(ConversionTrack(path=path) for path in request.files)
+    if not request.is_folder_book:
+        return tracks
+    return tuple(sorted(tracks, key=_folder_track_sort_key))
 
 
-def _has_certain_track_order(paths: tuple[Path, ...]) -> bool:
-    if len(paths) < 2:
+def _folder_track_sort_key(track: ConversionTrack) -> tuple[int, int, tuple[int, int | str], str]:
+    guessed_track = guess_track_number_from_filename(track.path.name)
+    track_number = track.track or guessed_track
+    return (
+        track.disc if track.disc is not None else 0,
+        0 if track_number is not None else 1,
+        track_sort_key(str(track_number) if track_number is not None else track.path.stem),
+        track.path.name.casefold(),
+    )
+
+
+def _has_certain_track_order(tracks: tuple[ConversionTrack, ...]) -> bool:
+    if len(tracks) < 2:
         return True
     numbers: list[int] = []
-    for path in paths:
-        match = _LEADING_TRACK_NUMBER.match(path.stem)
-        if match is None:
+    for track in tracks:
+        number = track.track or guess_track_number_from_filename(track.path.name)
+        if number is None:
             return False
-        numbers.append(int(match.group(1)))
+        numbers.append(number)
     return len(numbers) == len(set(numbers)) and numbers == sorted(numbers)
+
+
+def _chapter_title(track: ConversionTrack) -> str:
+    if track.title and track.title.strip():
+        return track.title.strip()
+    return guess_title_from_filename(track.path.name) or track.path.stem
+
+
+def _chapter_starts_from_track_durations(tracks: tuple[ConversionTrack, ...]) -> tuple[tuple[float, ...], str | None]:
+    starts: list[float] = []
+    elapsed = 0.0
+    complete = True
+    for track in tracks:
+        starts.append(elapsed)
+        if track.duration is None or track.duration <= 0:
+            complete = False
+            continue
+        elapsed += float(track.duration)
+    warning = None
+    if tracks and not complete:
+        warning = (
+            "chapter start times are conservative in the dry-run plan because one or more source durations are unavailable; "
+            "execution will use ffprobe durations when available"
+        )
+    return tuple(starts), warning

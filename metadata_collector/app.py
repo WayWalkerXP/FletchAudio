@@ -99,6 +99,19 @@ def target_settings_status(book):
         return 'yellow'
     return 'green'
 
+def sync_folder_book_metadata_from_rows(book, rows, failures=()):
+    """Refresh in-memory folder-book track/title fields after Mass Update saves."""
+    failed_paths={str(getattr(row, 'path', '')) for row, _error in failures}
+    rows_by_path={str(getattr(row, 'path', '')): row for row in rows if str(getattr(row, 'path', '')) not in failed_paths}
+    for file_meta in getattr(book, 'files', []) or []:
+        row=rows_by_path.get(str(getattr(file_meta, 'path', '')))
+        if row is None:
+            continue
+        track=str(getattr(row, 'track', '') or '').strip()
+        file_meta.track=int(track) if track.isdigit() else None
+        title=str(getattr(row, 'title', '') or '').strip()
+        file_meta.title=title or None
+
 def theme_mode_for_setting(setting):
     return THEME_MODES.get(setting, ft.ThemeMode.SYSTEM)
 
@@ -1954,6 +1967,7 @@ def main(page: ft.Page):
                 progress=open_progress_dialog('Saving Auto-Track changes...')
                 await asyncio.sleep(0.1)
                 successes, unchanged, failures=save_track_title_rows(rows)
+                sync_folder_book_metadata_from_rows(book, rows, failures)
                 close_dialog(progress)
                 await asyncio.sleep(0.1)
                 logging.info('Auto-Track save successful id=%s saved=%s unchanged=%s failures=%s', mass_update_screen_id, successes, unchanged, len(failures))
@@ -2028,6 +2042,7 @@ def main(page: ft.Page):
             progress=open_progress_dialog('Saving Mass Update changes...')
             await asyncio.sleep(0.1)
             successes, unchanged, failures=save_track_title_rows(rows)
+            sync_folder_book_metadata_from_rows(book, rows, failures)
             close_dialog(progress)
             logging.info('Mass Update save counts id=%s successes=%s unchanged=%s failures=%s', mass_update_screen_id, successes, unchanged, len(failures))
             summary=f'Saved: {successes}\nUnchanged: {unchanged}\nFailed: {len(failures)}'

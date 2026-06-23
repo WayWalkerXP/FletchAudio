@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .mass_update import guess_track_number_from_filename, track_sort_key
 from .models import AudioFileMetadata, Book
 
 VALID_TARGET_BITRATES = frozenset({32, 48, 64, 96, 128, 256, 384})
@@ -31,6 +32,15 @@ class ConversionSettings:
 
 
 @dataclass(frozen=True)
+class ConversionTrack:
+    path: Path
+    title: str | None = None
+    track: int | None = None
+    disc: int | None = None
+    duration: int | None = None
+
+
+@dataclass(frozen=True)
 class ConversionRequest:
     book_key: str
     source_path: Path
@@ -40,6 +50,7 @@ class ConversionRequest:
     target_channels: int | None
     dramatic_audio: bool | None
     metadata: dict[str, str] = field(default_factory=dict)
+    tracks: tuple[ConversionTrack, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -69,7 +80,10 @@ def build_conversion_request(book: Book) -> ConversionRequest:
     if not getattr(book, "files", None):
         raise ConversionRequestError("at least one source audio file is required")
 
-    files = tuple(_path_for(file_meta.path, "file path") for file_meta in book.files)
+    tracks = _collect_tracks(book.files)
+    if bool(book.is_folder_book):
+        tracks = tuple(sorted(tracks, key=_folder_track_sort_key))
+    files = tuple(track.path for track in tracks)
     target_bitrate = _common_normalized_value(book, "target_bitrate", VALID_TARGET_BITRATES, "target bitrate")
     target_channels = _common_normalized_value(book, "target_channels", VALID_TARGET_CHANNELS, "target channels")
     dramatic_audio = _common_dramatic_audio(book)
@@ -84,6 +98,7 @@ def build_conversion_request(book: Book) -> ConversionRequest:
         target_channels=target_channels,
         dramatic_audio=dramatic_audio,
         metadata=metadata,
+        tracks=tracks,
     )
 
 
@@ -140,3 +155,37 @@ def _collect_metadata(file_meta: AudioFileMetadata) -> dict[str, str]:
     if explicit is not None:
         metadata["explicit"] = "true" if explicit else "false"
     return metadata
+
+
+def _collect_tracks(files: list[AudioFileMetadata]) -> tuple[ConversionTrack, ...]:
+    return tuple(
+        ConversionTrack(
+            path=_path_for(file_meta.path, "file path"),
+            title=str(file_meta.title).strip() if getattr(file_meta, "title", None) else None,
+            track=_normalize_track_value(getattr(file_meta, "track", None)),
+            disc=_normalize_track_value(getattr(file_meta, "disc", None)),
+            duration=_normalize_track_value(getattr(file_meta, "duration", None)),
+        )
+        for file_meta in files
+    )
+
+
+def _normalize_track_value(value: Any) -> int | None:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        normalized = int(str(value).strip().split("/", 1)[0])
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _folder_track_sort_key(track: ConversionTrack) -> tuple[int, int, tuple[int, int | str], str]:
+    guessed_track = guess_track_number_from_filename(track.path.name)
+    track_number = track.track or guessed_track
+    return (
+        track.disc if track.disc is not None else 0,
+        0 if track_number is not None else 1,
+        track_sort_key(str(track_number) if track_number is not None else track.path.stem),
+        track.path.name.casefold(),
+    )

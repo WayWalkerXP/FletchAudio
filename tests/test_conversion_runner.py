@@ -5,7 +5,8 @@ from pathlib import Path
 from metadata_collector.alchemist_engine.errors import ExternalToolError
 from metadata_collector.alchemist_engine.ffmpeg import CommandResult
 from metadata_collector.alchemist_engine.models import AudioInfo
-from metadata_collector.conversion_adapter import ConversionRequest, ConversionSettings
+from metadata_collector.conversion_adapter import ConversionRequest, ConversionSettings, ConversionTrack
+from metadata_collector.conversion_archive import archive_source_file
 from metadata_collector.conversion_runner import ConversionRunner, ConversionStatus
 
 
@@ -31,13 +32,22 @@ def setup_conversion(tmp_path: Path, *, folder: bool = False):
     if folder:
         source = tmp_path / "book"
         source.mkdir()
-        track = source / "01.mp3"
-        track.write_bytes(b"source")
-        files = (track,)
+        track_one = source / "01.mp3"
+        track_two = source / "02.mp3"
+        extra = source / "notes.txt"
+        track_one.write_bytes(b"one")
+        track_two.write_bytes(b"two")
+        extra.write_bytes(b"notes")
+        files = (track_two, track_one)
+        tracks = (
+            ConversionTrack(track_two, "Second Track", 2, None, 60),
+            ConversionTrack(track_one, "First Track", 1, None, 60),
+        )
     else:
         source = tmp_path / "book.mp3"
         source.write_bytes(b"source")
         files = (source,)
+        tracks = ()
     request = ConversionRequest(
         book_key="book",
         source_path=source,
@@ -56,6 +66,7 @@ def setup_conversion(tmp_path: Path, *, folder: bool = False):
             "target_bitrate": "64",
             "target_channels": "1",
         },
+        tracks=tracks,
     )
     settings = ConversionSettings(output_dir=output_dir, processed_dir=processed_dir)
     return request, settings
@@ -281,17 +292,132 @@ def test_existing_destination_is_not_overwritten(tmp_path):
     assert calls == []
 
 
-def test_folder_book_is_rejected_before_conversion_work(tmp_path):
+def test_successful_folder_conversion_archives_full_source_folder_after_promotion(tmp_path):
     request, settings = setup_conversion(tmp_path, folder=True)
     calls = []
+    archive_seen_after_promotion = []
+
+    def command(command):
+        calls.append(command)
+        return successful_command(command)
+
+    def archive_after_promotion(source, archive_dir):
+        archive_seen_after_promotion.append((settings.output_dir / "Author - Title.m4b").exists())
+        return archive_source_file(source, archive_dir)
+
     result = ConversionRunner(
         settings,
         analyzer=FakeAnalyzer(),
+        validator=FakeValidator(),
+        command_runner=command,
+        metadata_writer=lambda path, tags: None,
+        cover_copier=lambda source, destination: True,
+        archive_mover=archive_after_promotion,
+    ).run(request)
+
+    assert result.status == ConversionStatus.SUCCESS
+    assert not request.source_path.exists()
+    assert result.archived_path.is_dir()
+    assert (result.archived_path / "01.mp3").read_bytes() == b"one"
+    assert (result.archived_path / "02.mp3").read_bytes() == b"two"
+    assert (result.archived_path / "notes.txt").read_bytes() == b"notes"
+    assert archive_seen_after_promotion == [True]
+    assert "-f" in calls[0]
+    assert "concat" in calls[0]
+    assert calls[0][-1] == str(result.temporary_output_path)
+
+
+def test_folder_conversion_failure_leaves_source_folder_in_place(tmp_path):
+    request, settings = setup_conversion(tmp_path, folder=True)
+
+    def fail(command):
+        Path(command[-1]).write_bytes(b"partial")
+        return CommandResult(command, 1, "", "concat failed")
+
+    result = ConversionRunner(
+        settings,
+        analyzer=FakeAnalyzer(),
+        validator=FakeValidator(),
+        command_runner=fail,
+    ).run(request)
+
+    assert result.status == ConversionStatus.FAILED
+    assert request.source_path.exists()
+    assert (request.source_path / "01.mp3").exists()
+    assert not result.final_output_path.exists()
+    assert not result.temporary_output_path.exists()
+
+
+def test_folder_validation_failure_leaves_source_folder_in_place(tmp_path):
+    request, settings = setup_conversion(tmp_path, folder=True)
+
+    result = ConversionRunner(
+        settings,
+        analyzer=FakeAnalyzer(),
+        validator=FakeValidator(False),
+        command_runner=successful_command,
+    ).run(request)
+
+    assert result.status == ConversionStatus.FAILED
+    assert request.source_path.exists()
+    assert (request.source_path / "02.mp3").exists()
+    assert not result.final_output_path.exists()
+
+
+def test_folder_metadata_failure_leaves_source_folder_in_place(tmp_path):
+    request, settings = setup_conversion(tmp_path, folder=True)
+
+    def fail_metadata(path, tags):
+        raise ValueError("metadata failed")
+
+    result = ConversionRunner(
+        settings,
+        analyzer=FakeAnalyzer(),
+        validator=FakeValidator(),
+        command_runner=successful_command,
+        metadata_writer=fail_metadata,
+    ).run(request)
+
+    assert result.status == ConversionStatus.FAILED
+    assert request.source_path.exists()
+    assert not result.final_output_path.exists()
+
+
+def test_folder_promotion_failure_leaves_source_folder_in_place(tmp_path):
+    request, settings = setup_conversion(tmp_path, folder=True)
+
+    def create_collision(path, tags):
+        (settings.output_dir / "Author - Title.m4b").write_bytes(b"collision")
+
+    result = ConversionRunner(
+        settings,
+        analyzer=FakeAnalyzer(),
+        validator=FakeValidator(),
+        command_runner=successful_command,
+        metadata_writer=create_collision,
+    ).run(request)
+
+    assert result.status == ConversionStatus.FAILED
+    assert request.source_path.exists()
+    assert (settings.output_dir / "Author - Title.m4b").read_bytes() == b"collision"
+
+
+def test_existing_folder_destination_prevents_conversion(tmp_path):
+    request, settings = setup_conversion(tmp_path, folder=True)
+    destination = settings.output_dir / "Author - Title.m4b"
+    destination.write_bytes(b"existing")
+    calls = []
+
+    result = ConversionRunner(
+        settings,
+        analyzer=FakeAnalyzer(),
+        validator=FakeValidator(),
         command_runner=lambda command: calls.append(command),
     ).run(request)
 
-    assert result.status == ConversionStatus.UNSUPPORTED
+    assert result.status == ConversionStatus.FAILED
     assert request.source_path.exists()
+    assert destination.read_bytes() == b"existing"
     assert calls == []
 
 

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from metadata_collector.conversion_adapter import ConversionTrack
 from metadata_collector.conversion_runner import (
     ConversionProgressEvent,
     ConversionResult,
@@ -9,7 +10,6 @@ from metadata_collector.conversion_runner import (
 )
 from metadata_collector.conversion_ui import (
     ARCHIVE_DIRECTORY_REQUIRED,
-    FOLDER_CONVERSION_UNSUPPORTED,
     ConversionUiError,
     build_ui_conversion_settings,
     conversion_progress_status,
@@ -20,20 +20,40 @@ from metadata_collector.models import AudioFileMetadata, Book
 
 
 def make_book(path: Path, *, folder=False, bitrate=64, channels=1) -> Book:
+    files = [AudioFileMetadata(str(path), title="Title", author="Author", target_bitrate=bitrate, target_channels=channels)]
+    if folder:
+        files = [
+            AudioFileMetadata(str(path / "02.mp3"), title="Chapter Two", author="Author", album="Title", track=2, target_bitrate=bitrate, target_channels=channels),
+            AudioFileMetadata(str(path / "01.mp3"), title="Chapter One", author="Author", album="Title", track=1, target_bitrate=bitrate, target_channels=channels),
+        ]
     return Book(
         "book",
         str(path),
         folder,
-        [AudioFileMetadata(str(path), title="Title", author="Author", target_bitrate=bitrate, target_channels=channels)],
+        files,
     )
 
 
-def test_folder_book_conversion_is_blocked(tmp_path):
+def test_folder_book_conversion_can_be_prepared(tmp_path):
     book_dir = tmp_path / "book"
     book_dir.mkdir()
+    (book_dir / "01.mp3").write_bytes(b"one")
+    (book_dir / "02.mp3").write_bytes(b"two")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    archive_dir = tmp_path / "archive"
 
-    with pytest.raises(ConversionUiError, match=FOLDER_CONVERSION_UNSUPPORTED):
-        prepare_conversion(make_book(book_dir, folder=True), {"conversion_output_dir": tmp_path, "archive_dir": tmp_path})
+    prepared = prepare_conversion(
+        make_book(book_dir, folder=True),
+        {"conversion_output_dir": output_dir, "archive_dir": archive_dir},
+    )
+
+    assert prepared.request.tracks == (
+        ConversionTrack(book_dir / "01.mp3", "Chapter One", 1, None, None),
+        ConversionTrack(book_dir / "02.mp3", "Chapter Two", 2, None, None),
+    )
+    assert prepared.plan.status == "planned"
+    assert prepared.plan.input_paths == (book_dir / "01.mp3", book_dir / "02.mp3")
 
 
 def test_missing_output_directory_prevents_conversion(tmp_path):
