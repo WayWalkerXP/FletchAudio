@@ -116,6 +116,25 @@ def test_existing_destination_is_reported_as_conflict(tmp_path):
     assert any("destination conflict" in error for error in result.errors)
 
 
+def test_existing_archive_destination_does_not_block_plan(tmp_path):
+    source = tmp_path / "source.mp3"
+    source.write_bytes(b"source")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    archive_dir = tmp_path / "archive"
+    archive_dir.mkdir()
+    (archive_dir / source.name).write_bytes(b"existing")
+
+    result = plan_conversion(
+        make_request(source),
+        ConversionSettings(output_dir=output_dir, processed_dir=archive_dir),
+    )
+
+    assert result.status == "planned"
+    assert result.archive_path == archive_dir / source.name
+    assert not any("archive destination conflict" in error for error in result.errors)
+
+
 def test_invalid_target_values_are_rejected_by_planner(tmp_path):
     source = tmp_path / "source.mp3"
     source.write_bytes(b"source")

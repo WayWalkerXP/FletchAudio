@@ -132,6 +132,8 @@ from .maintenance import clear_metadata_history, compact_database, database_path
 from .staging import destination_for, discover_staging_candidates, move_to_staging, safe_move_to_staging, validate_staging_dir
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
 from .history_restore import changes_for_group_file, is_restore_supported, list_change_groups_for_file, restore_selected_metadata
+from .conversion_runner import run_conversion
+from .conversion_ui import ConversionUiError, conversion_progress_status, conversion_result_status, prepare_conversion
 logging.basicConfig(level=logging.INFO)
 
 def log_page_state(page: ft.Page, label: str) -> None:
@@ -262,6 +264,114 @@ def main(page: ft.Page):
         page.snack_bar = snack_bar
         snack_bar.open = True
         page.update()
+
+    def show_conversion_error(message: str):
+        def open_directory_settings(e):
+            close_dialog(dialog)
+            show_settings('Directories')
+
+        dialog=ft.AlertDialog(
+            modal=True,
+            title=ft.Text('Conversion unavailable'),
+            content=ft.Text(message, selectable=True),
+            actions=[
+                ft.TextButton('Settings > Directories', on_click=open_directory_settings),
+                ft.TextButton('OK', on_click=lambda e: close_dialog(dialog)),
+            ],
+        )
+        open_dialog(dialog)
+
+    async def run_prepared_conversion(prepared, plan_dialog):
+        close_dialog(plan_dialog)
+        progress_text=ft.Text('Starting conversion...')
+        progress_detail=ft.Text('', size=12, selectable=True)
+        progress_dialog=ft.AlertDialog(
+            modal=True,
+            title=ft.Text('Converting audiobook'),
+            content=ft.Column(
+                [ft.ProgressRing(), progress_text, progress_detail],
+                tight=True,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+        )
+        open_dialog(progress_dialog)
+        await asyncio.sleep(0.05)
+        loop=asyncio.get_running_loop()
+
+        def apply_progress(event):
+            ui_status=conversion_progress_status(event)
+            progress_text.value=ui_status.message
+            progress_detail.value=str(ui_status.output_path or event.source_path)
+            status.value=ui_status.message
+            try:
+                page.update()
+            except Exception:
+                logging.debug('Conversion progress UI update failed', exc_info=True)
+
+        def receive_progress(event):
+            loop.call_soon_threadsafe(apply_progress, event)
+
+        result=await asyncio.to_thread(
+            run_conversion,
+            prepared.request,
+            prepared.settings,
+            receive_progress,
+        )
+        final_status=conversion_result_status(result)
+        close_dialog(progress_dialog)
+        status.value=final_status.message
+        def close_conversion_result_dialog(e):
+            close_dialog(result_dialog)
+            if final_status.state == 'success':
+                logging.info('Conversion result acknowledged; refreshing main book list after successful conversion')
+                scan()
+        result_dialog=ft.AlertDialog(
+            modal=True,
+            title=ft.Text('Conversion complete' if final_status.state == 'success' else 'Conversion failed'),
+            content=ft.Text(final_status.message, selectable=True),
+            actions=[ft.TextButton('OK', on_click=close_conversion_result_dialog)],
+        )
+        open_dialog(result_dialog)
+
+    def show_conversion_plan(book):
+        try:
+            prepared=prepare_conversion(book, settings)
+        except ConversionUiError as exc:
+            show_conversion_error(str(exc))
+            return
+        plan=prepared.plan
+        warnings='\n'.join(f'• {warning}' for warning in plan.warnings) or 'None'
+        errors='\n'.join(f'• {error}' for error in plan.errors) or 'None'
+        preview=ft.Column(
+            [
+                ft.Text(f'Output path: {plan.output_path or "Unavailable"}', selectable=True),
+                ft.Text(f'Archive path: {plan.archive_path or "Unavailable"}', selectable=True),
+                ft.Text(f'Target bitrate: {plan.target_bitrate or "Missing"} kbps'),
+                ft.Text(f'Target channels: {plan.target_channels or "Missing"}'),
+                ft.Text(f'Codec: {plan.selected_codec or "Missing"}'),
+                ft.Text(f'Warnings:\n{warnings}', selectable=True),
+                ft.Text(f'Errors:\n{errors}', selectable=True, color=ft.Colors.RED if plan.errors else None),
+            ],
+            tight=True,
+            spacing=8,
+            scroll=ft.ScrollMode.AUTO,
+            height=360,
+            width=680,
+        )
+        plan_dialog=ft.AlertDialog(
+            modal=True,
+            title=ft.Text('Conversion plan'),
+            content=preview,
+            actions=[
+                ft.TextButton('Close', on_click=lambda e: close_dialog(plan_dialog)),
+                *(
+                    [ft.FilledButton('Convert', on_click=lambda e: page.run_task(run_prepared_conversion, prepared, plan_dialog) if hasattr(page, 'run_task') else asyncio.create_task(run_prepared_conversion(prepared, plan_dialog)))]
+                    if plan.status == 'planned'
+                    else []
+                ),
+            ],
+        )
+        open_dialog(plan_dialog)
 
     dialog_lifecycle_apis = {}
 
@@ -2494,6 +2604,7 @@ def main(page: ft.Page):
             actions=[
                 ft.Button('Restore / Review History', on_click=lambda e, book=book: show_metadata_history(book)),
                 target_button,
+                ft.Button('Plan Conversion', on_click=lambda e, book=book: show_conversion_plan(book)),
                 ft.Button('Search by Title & Author', on_click=create_title_author_search_handler(book)),
                 ft.Button('Search by ASIN', on_click=create_asin_search_handler(book)),
             ]
@@ -2601,6 +2712,8 @@ def main(page: ft.Page):
                 'Directories': {
                     'working_directory': settings.get('working_directory') or '',
                     'staging_dir': settings.get('staging_dir') or '',
+                    'conversion_output_dir': settings.get('conversion_output_dir') or '',
+                    'archive_dir': settings.get('archive_dir') or '',
                 },
                 'API Settings': {
                     'abs_url': settings.get('abs_url') or '',
@@ -2623,6 +2736,8 @@ def main(page: ft.Page):
             if section_name == 'Directories':
                 settings['working_directory']=values['working_directory'].strip() or None
                 settings['staging_dir']=values['staging_dir'].strip() or None
+                settings['conversion_output_dir']=values['conversion_output_dir'].strip() or None
+                settings['archive_dir']=values['archive_dir'].strip() or None
             elif section_name == 'API Settings':
                 settings['abs_url']=values['abs_url'].strip() or None
                 settings['abs_api_key']=values['abs_api_key'].strip() or None
@@ -2652,7 +2767,9 @@ def main(page: ft.Page):
             if name == 'Directories':
                 working=ft.TextField(label='Working Directory', value=staged[name]['working_directory'], width=520, on_change=lambda e: set_field('working_directory', e.control.value))
                 staging=ft.TextField(label='Staging Directory', value=staged[name]['staging_dir'], width=520, on_change=lambda e: set_field('staging_dir', e.control.value))
-                fields['working_directory']=working; fields['staging_dir']=staging
+                conversion_output=ft.TextField(label='Conversion Output Directory', value=staged[name]['conversion_output_dir'], width=520, on_change=lambda e: set_field('conversion_output_dir', e.control.value))
+                archive=ft.TextField(label='Archive Directory', value=staged[name]['archive_dir'], width=520, on_change=lambda e: set_field('archive_dir', e.control.value))
+                fields['working_directory']=working; fields['staging_dir']=staging; fields['conversion_output_dir']=conversion_output; fields['archive_dir']=archive
                 async def browse_working(e):
                     picker=create_file_picker()
                     path=await maybe_await(picker.get_directory_path())
@@ -2663,9 +2780,21 @@ def main(page: ft.Page):
                     path=await maybe_await(picker.get_directory_path())
                     if path:
                         staging.value=path; set_field('staging_dir', path); page.update()
+                async def browse_conversion_output(e):
+                    picker=create_file_picker()
+                    path=await maybe_await(picker.get_directory_path())
+                    if path:
+                        conversion_output.value=path; set_field('conversion_output_dir', path); page.update()
+                async def browse_archive(e):
+                    picker=create_file_picker()
+                    path=await maybe_await(picker.get_directory_path())
+                    if path:
+                        archive.value=path; set_field('archive_dir', path); page.update()
                 content.controls.extend([
                     ft.Row([working, ft.Button('Browse', on_click=browse_working)], wrap=True),
                     ft.Row([staging, ft.Button('Browse', on_click=browse_staging)], wrap=True),
+                    ft.Row([conversion_output, ft.Button('Browse', on_click=browse_conversion_output)], wrap=True),
+                    ft.Row([archive, ft.Button('Browse', on_click=browse_archive)], wrap=True),
                     ft.TextField(label='Library Directory', value='Reserved for future library move/import features', read_only=True, width=520),
                     ft.Row([ft.FilledButton('Save Directories', on_click=lambda e: (save_section(name), render_section(), page.update())), ft.Button('Cancel/Clear', on_click=lambda e: (staged.__setitem__(name, saved(name)), render_section(), page.update()))]),
                 ])

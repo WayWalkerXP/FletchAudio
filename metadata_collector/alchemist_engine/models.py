@@ -59,6 +59,10 @@ class AudioInfo:
     chapter_count: int
     metadata: dict[str, str] = field(default_factory=dict)
     artwork_stream: ArtworkStream | None = None
+    audio_duration_seconds: float | None = None
+    format_duration_seconds: float | None = None
+    duration_source: str = "audio"
+    stream_summary: tuple[str, ...] = ()
 
     @property
     def bitrate_kbps(self) -> int:

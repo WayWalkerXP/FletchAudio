@@ -1,6 +1,6 @@
 from mutagen.mp4 import MP4FreeForm
 
-from metadata_collector.audio_tags import diff_metadata, normalize_tag_value, write_audio_metadata
+from metadata_collector.audio_tags import copy_embedded_cover_art, diff_metadata, normalize_tag_value, write_audio_metadata
 from metadata_collector.models import AudioFileMetadata
 
 
@@ -176,6 +176,34 @@ def test_write_audio_metadata_replaces_existing_mp4_cover(monkeypatch):
     assert bytes(covers[0]) == JPEG_BYTES
     assert covers[0].imageformat == MP4Cover.FORMAT_JPEG
     assert fake_audio.saved is True
+
+
+def test_copy_embedded_cover_art_between_mp4_files(monkeypatch):
+    import metadata_collector.audio_tags as audio_tags
+    from mutagen.mp4 import MP4Cover
+
+    class FakeMP4(audio_tags.MP4):
+        def __init__(self, tags):
+            self.tags = tags
+            self.saved = False
+
+        def save(self):
+            self.saved = True
+
+    source = FakeMP4({'covr': [MP4Cover(PNG_BYTES, imageformat=MP4Cover.FORMAT_PNG)]})
+    destination = FakeMP4({})
+
+    def fake_file(path, easy=False):
+        return source if path == '/tmp/source.m4b' else destination
+
+    monkeypatch.setattr('metadata_collector.audio_tags.File', fake_file)
+
+    copied = copy_embedded_cover_art('/tmp/source.m4b', '/tmp/output.m4b')
+
+    assert copied is True
+    assert bytes(destination.tags['covr'][0]) == PNG_BYTES
+    assert destination.tags['covr'][0].imageformat == MP4Cover.FORMAT_PNG
+    assert destination.saved is True
 
 
 def test_format_genres_for_tag_list_of_genres():

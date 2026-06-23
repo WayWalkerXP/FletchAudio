@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from metadata_collector.conversion_adapter import (
     ConversionRequest,
@@ -24,9 +25,9 @@ def test_single_file_book_builds_conversion_request():
 
     assert isinstance(request, ConversionRequest)
     assert request.book_key == "book-key"
-    assert str(request.source_path) == "/library/book.m4b"
+    assert request.source_path == Path("/library/book.m4b")
     assert request.is_folder_book is False
-    assert tuple(str(path) for path in request.files) == ("/library/book.m4b",)
+    assert request.files == (Path("/library/book.m4b"),)
     assert request.target_bitrate == 64
     assert request.target_channels == 1
     assert request.dramatic_audio is False
@@ -48,11 +49,11 @@ def test_folder_book_builds_request_with_all_file_paths():
 
     request = build_conversion_request(book)
 
-    assert str(request.source_path) == "/library/Folder Book"
+    assert request.source_path == Path("/library/Folder Book")
     assert request.is_folder_book is True
-    assert tuple(str(path) for path in request.files) == (
-        "/library/Folder Book/01.mp3",
-        "/library/Folder Book/02.mp3",
+    assert request.files == (
+        Path("/library/Folder Book/01.mp3"),
+        Path("/library/Folder Book/02.mp3"),
     )
     assert request.target_bitrate == 48
     assert request.target_channels == 2

@@ -1,6 +1,8 @@
 from pathlib import Path
 import sys
 
+import pytest
+
 
 def test_package_imports_cleanly():
     import metadata_collector.alchemist_engine as engine
@@ -27,14 +29,53 @@ def test_build_ffmpeg_command_shape():
 
     assert command[0] == "ffmpeg"
     assert "-i" in command
-    assert "/tmp/input.mp3" in command
+    assert str(Path("/tmp/input.mp3")) in command
     assert "-c:a" in command
     assert "libfdk_aac" in command
     assert "-b:a" in command
     assert "64k" in command
     assert "-ac" in command
     assert "1" in command
-    assert "/tmp/output.m4b" in command
+    assert str(Path("/tmp/output.m4b")) in command
+
+
+def test_build_ffmpeg_command_maps_only_audiobook_streams():
+    from metadata_collector.alchemist_engine.ffmpeg import build_ffmpeg_command
+
+    command = build_ffmpeg_command(
+        Path("/tmp/input.m4b"),
+        Path("/tmp/output.m4b"),
+        "libfdk_aac",
+        32,
+        1,
+    )
+    pairs = list(zip(command, command[1:]))
+
+    assert ("-map", "0:a:0") in pairs
+    assert ("-map", "0:v?") not in pairs
+    assert ("-map", "0") not in pairs
+    assert ("-map_chapters", "0") in pairs
+    assert ("-map_metadata", "0") in pairs
+    assert ("-map", "0:s?") not in pairs
+    assert ("-map", "0:d?") not in pairs
+    assert ("-map", "0:t?") not in pairs
+
+
+def test_build_ffmpeg_command_does_not_map_artwork_in_ffmpeg_pass():
+    from metadata_collector.alchemist_engine.ffmpeg import build_ffmpeg_command
+
+    command = build_ffmpeg_command(
+        Path("/tmp/input.m4b"),
+        Path("/tmp/output.m4b"),
+        "libfdk_aac",
+        32,
+        1,
+    )
+    pairs = list(zip(command, command[1:]))
+
+    assert ("-map", "0:v?") not in pairs
+    assert "-c:v" not in command
+    assert "-disposition:v:0" not in command
 
 
 def test_key_dataclasses_import_and_minimal_instantiation():
@@ -74,3 +115,37 @@ def test_importing_engine_does_not_import_flet():
     import metadata_collector.alchemist_engine.models  # noqa: F401
 
     assert "flet" not in sys.modules
+
+
+def test_missing_ffmpeg_is_reported_before_subprocess(monkeypatch, caplog):
+    import subprocess
+
+    from metadata_collector.alchemist_engine.errors import ExternalToolError
+    from metadata_collector.alchemist_engine import ffmpeg
+
+    popen_calls = []
+    monkeypatch.setattr(ffmpeg.shutil, "which", lambda executable: None)
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: popen_calls.append(args))
+
+    with caplog.at_level("INFO"):
+        with pytest.raises(ExternalToolError) as excinfo:
+            ffmpeg.run_external_command(["ffmpeg", "-hide_banner", "-encoders"])
+
+    assert "FFmpeg executable not found" in str(excinfo.value)
+    assert popen_calls == []
+    assert "External command argv" in caplog.text
+    assert "resolved=None" in caplog.text
+
+
+def test_missing_ffprobe_has_specific_message(monkeypatch):
+    from metadata_collector.alchemist_engine.errors import ExternalToolError
+    from metadata_collector.alchemist_engine import ffmpeg
+
+    monkeypatch.setattr(ffmpeg.shutil, "which", lambda executable: None)
+
+    with pytest.raises(ExternalToolError) as excinfo:
+        ffmpeg.run_external_command(["ffprobe", "-v", "error", "book.mp3"])
+
+    assert str(excinfo.value) == (
+        "FFprobe executable not found. Install FFmpeg or configure its path before converting."
+    )
