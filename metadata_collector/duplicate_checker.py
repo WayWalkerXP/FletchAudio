@@ -78,6 +78,47 @@ def _dict_matches_asin(item: dict[str, Any], normalized_asin: str) -> bool:
     return False
 
 
+def _normalized_text(value: Any) -> str:
+    return str(value or '').strip().casefold()
+
+
+def _metadata_for_item(item: dict[str, Any]) -> dict[str, Any]:
+    media = item.get('media')
+    if isinstance(media, dict) and isinstance(media.get('metadata'), dict):
+        return media['metadata']
+    return {}
+
+
+def _dict_matches_author_album(item: dict[str, Any], author: str, album: str) -> bool:
+    normalized_author = _normalized_text(author)
+    normalized_album = _normalized_text(album)
+    metadata = _metadata_for_item(item)
+    album_candidates = (
+        item.get('title'),
+        item.get('name'),
+        metadata.get('title'),
+        metadata.get('subtitle'),
+        metadata.get('album'),
+    )
+    author_candidates = (
+        item.get('author'),
+        item.get('authorName'),
+        metadata.get('authorName'),
+        metadata.get('author'),
+        metadata.get('authors'),
+    )
+    album_match = any(_normalized_text(candidate) == normalized_album for candidate in album_candidates)
+    author_match = False
+    for candidate in author_candidates:
+        if isinstance(candidate, list):
+            author_match = any(_normalized_text(entry.get('name') if isinstance(entry, dict) else entry) == normalized_author for entry in candidate)
+        else:
+            author_match = _normalized_text(candidate) == normalized_author
+        if author_match:
+            break
+    return author_match and album_match
+
+
 def _extract_asin_matches(payload: Any, asin: str) -> list[dict[str, Any]]:
     normalized = normalize_asin_for_duplicate_check(asin)
     matches = []
@@ -141,3 +182,21 @@ def query_abs_by_asin(abs_url: str, api_key: str, asin: str) -> list[dict[str, A
         return []
     payload = _abs_library_items_payload(abs_url, api_key)
     return _extract_asin_matches(payload, normalized)
+
+
+def query_abs_by_author_album(abs_url: str, api_key: str, author: str, album: str) -> list[dict[str, Any]]:
+    normalized_author = _normalized_text(author)
+    normalized_album = _normalized_text(album)
+    if not normalized_author or not normalized_album:
+        return []
+    payload = _abs_library_items_payload(abs_url, api_key)
+    matches = []
+    seen = set()
+    for item in _walk_dicts(payload):
+        if not _dict_matches_author_album(item, author, album):
+            continue
+        identity = id(item)
+        if identity not in seen:
+            seen.add(identity)
+            matches.append(item)
+    return matches

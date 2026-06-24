@@ -1,6 +1,6 @@
 from mutagen.mp4 import MP4FreeForm
 
-from metadata_collector.audio_tags import copy_embedded_cover_art, diff_metadata, normalize_tag_value, write_audio_metadata
+from metadata_collector.audio_tags import copy_embedded_cover_art, diff_metadata, normalize_tag_value, read_audio_metadata, write_audio_metadata
 from metadata_collector.models import AudioFileMetadata
 
 
@@ -63,6 +63,41 @@ def test_write_audio_metadata_filters_non_writable_fields_before_tag_writes(monk
     assert 'TXXX:DURATION' not in fake_audio.tags
     assert 'TXXX:HAS_COVER' not in fake_audio.tags
     assert fake_audio.saved is True
+
+
+def test_read_audio_metadata_uses_mp4_series_sequence_tag(monkeypatch):
+    import metadata_collector.audio_tags as audio_tags
+
+    class FakeMP4(audio_tags.MP4):
+        def __init__(self):
+            self.tags = {
+                '----:com.apple.iTunes:SERIES': [MP4FreeForm(b'Series Name')],
+                '----:com.apple.iTunes:SERIES_SEQUENCE': [MP4FreeForm(b'03')],
+            }
+            self.info = None
+
+    monkeypatch.setattr('metadata_collector.audio_tags.File', lambda path, easy=False: FakeMP4())
+
+    metadata = read_audio_metadata('/tmp/book.m4b')
+
+    assert metadata.series == 'Series Name'
+    assert metadata.series_sequence == '03'
+
+
+def test_read_audio_metadata_uses_id3_series_sequence_tag(monkeypatch):
+    class FakeAudio:
+        tags = {
+            'TXXX:SERIES': ['Series Name'],
+            'TXXX:SERIES_SEQUENCE': ['04'],
+        }
+        info = None
+
+    monkeypatch.setattr('metadata_collector.audio_tags.File', lambda path, easy=False: FakeAudio())
+
+    metadata = read_audio_metadata('/tmp/book.mp3')
+
+    assert metadata.series == 'Series Name'
+    assert metadata.series_sequence == '04'
 
 JPEG_BYTES = b'\xff\xd8\xff\xe0fake-jpeg\xff\xd9'
 PNG_BYTES = b'\x89PNG\r\n\x1a\nfake-png'
