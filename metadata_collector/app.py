@@ -133,7 +133,7 @@ def margin_only(*, left=0, right=0, top=0, bottom=0):
     return ft.Margin(left=left, right=right, top=top, bottom=bottom)
 
 from .audible_client import AudibleClient, build_title_author_query, get_runtime_match_category, normalize_asin, parse_search_results, product_from_asin_response, runtime_difference_minutes, sort_results_by_runtime_match, validate_asin
-from .duplicate_checker import AbsApiEndpointError, AbsConnectionError, DuplicateCheckStatus, normalize_asin_for_duplicate_check, query_abs_by_asin
+from .duplicate_checker import AbsApiEndpointError, AbsConnectionError, DuplicateCheckStatus, normalize_asin_for_duplicate_check, query_abs_by_asin, query_abs_by_author_album
 from .config import load_settings, save_settings
 from .db import init_db, get_session_factory
 from .audio_scan import scan_directory
@@ -149,6 +149,23 @@ from .conversion_queue import ACTIVE_STATUSES, PENDING_STATUSES, ConversionQueue
 from .conversion_runner import run_conversion
 from .conversion_targets import apply_guessed_targets, apply_manual_targets, build_target_state, clone_book_with_targets, format_queue_target, queue_item_dropdown_options, queue_status_color_key
 from .conversion_ui import ConversionUiError, conversion_progress_status, conversion_result_status, prepare_conversion
+from .move_library import (
+    COLLISION_OVERWRITE,
+    COLLISION_OVERWRITE_ALL,
+    COLLISION_SKIP,
+    COLLISION_SKIP_ALL,
+    DUPLICATE_ASIN,
+    DUPLICATE_AUTHOR_ALBUM,
+    DUPLICATE_NO_MATCH,
+    STATUS_ERROR,
+    STATUS_OK,
+    STATUS_WARN,
+    apply_duplicate_result,
+    discover_library_move_items,
+    dry_run,
+    move_items,
+    selected_items,
+)
 logging.basicConfig(level=logging.INFO)
 
 def log_page_state(page: ft.Page, label: str) -> None:
@@ -269,6 +286,7 @@ def main(page: ft.Page):
                         ft.Button('Rescan', on_click=lambda _: scan()),
                         ft.Button('Check for Duplicates', on_click=check_for_duplicates),
                         ft.Button('Move to Staging', on_click=show_move_to_staging),
+                        ft.Button('Move to ABS Library', on_click=show_move_to_abs_library),
                         ft.Button('Conversion Queue', on_click=lambda _: show_conversion_queue()),
                     ],
                     spacing=10,
@@ -2251,6 +2269,249 @@ def main(page: ft.Page):
         page.update()
         log_page_state(page, f'after rendering Move to Staging screen id={move_screen_id}')
 
+    def show_move_to_abs_library(_=None):
+        nonlocal current_screen
+        current_screen='move_to_abs_library'
+        page.route='/move-abs-library'
+        abs_root_value=(settings.get('abs_library_dir') or '').strip()
+        if not abs_root_value:
+            show_warning('ABS library root required', 'ABS Library Directory is not configured. Set it in Settings > Directories before moving books to the ABS library.')
+            return
+        abs_root=Path(abs_root_value).expanduser()
+        if abs_root.exists() and not abs_root.is_dir():
+            show_warning('ABS library root unavailable', f'ABS Library Directory is not a folder: {abs_root}')
+            return
+        items, scan_errors=discover_library_move_items(settings)
+        selected_checks={}
+        normalize_authors=ft.Checkbox(label='Normalize Authors', value=False)
+        clean_album_text=ft.Checkbox(label='Clean Album Text', value=False)
+        table_rows=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=0)
+        divider_color=ft.Colors.OUTLINE_VARIANT
+        row_border=ft.Border(bottom=ft.BorderSide(1, divider_color))
+        column_border=ft.Border(left=ft.BorderSide(1, divider_color))
+        status_colors={
+            STATUS_OK: ft.Colors.with_opacity(0.22, ft.Colors.GREEN),
+            STATUS_WARN: ft.Colors.with_opacity(0.36, ft.Colors.AMBER_700),
+            STATUS_ERROR: ft.Colors.with_opacity(0.36, ft.Colors.RED),
+        }
+
+        def cell(content, width, border=None, padding=8):
+            if isinstance(content, str):
+                content=ft.Text(content, selectable=True, width=width - (padding * 2), no_wrap=False)
+            return ft.Container(content=content, width=width, padding=padding, border=border)
+
+        def header_row():
+            return ft.Row([
+                cell(ft.Text('Select', weight=ft.FontWeight.BOLD), 70),
+                cell(ft.Text('Status', weight=ft.FontWeight.BOLD), 160, column_border),
+                cell(ft.Text('Duplicate', weight=ft.FontWeight.BOLD), 160, column_border),
+                cell(ft.Text('Num Files', weight=ft.FontWeight.BOLD), 90, column_border),
+                cell(ft.Text('Author', weight=ft.FontWeight.BOLD), 180, column_border),
+                cell(ft.Text('Album', weight=ft.FontWeight.BOLD), 220, column_border),
+                cell(ft.Text('Series', weight=ft.FontWeight.BOLD), 170, column_border),
+                cell(ft.Text('Sequence #', weight=ft.FontWeight.BOLD), 110, column_border),
+            ], spacing=0)
+
+        def refresh_move_rows():
+            table_rows.controls.clear()
+            selected_checks.clear()
+            if not items:
+                table_rows.controls.append(ft.Text('No audiobook items found in the configured staging or converted folders.'))
+                page.update()
+                return
+            for item in items:
+                checkbox=ft.Checkbox(value=item.selected, disabled=not item.checkable)
+                selected_checks[id(item)]=checkbox
+                status_text=item.status if not item.status_detail else f'{item.status} {item.status_detail}'
+                table_rows.controls.append(ft.Container(
+                    content=ft.Row([
+                        cell(checkbox, 70),
+                        cell(status_text, 160, column_border),
+                        cell(item.duplicate or '', 160, column_border),
+                        cell(str(item.num_files), 90, column_border),
+                        cell(item.author, 180, column_border),
+                        cell(item.album, 220, column_border),
+                        cell(item.series, 170, column_border),
+                        cell(item.series_sequence, 110, column_border),
+                    ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START),
+                    border=row_border,
+                    bgcolor=status_colors.get(item.status),
+                ))
+            page.update()
+
+        def sync_selected():
+            for item in items:
+                checkbox=selected_checks.get(id(item))
+                if checkbox is not None:
+                    item.selected=bool(checkbox.value) and item.checkable
+
+        def selected_or_warn():
+            sync_selected()
+            selected=selected_items(items)
+            if not selected:
+                show_status('No checkable ABS library items selected.')
+                return []
+            return selected
+
+        def rows_for_review():
+            selected=selected_or_warn()
+            if not selected:
+                return []
+            return dry_run(items, abs_root)
+
+        def open_review_dialog(title, rows, actions):
+            if not rows:
+                return
+            review_rows=[
+                ft.Row([
+                    cell(ft.Text('Album', weight=ft.FontWeight.BOLD), 180),
+                    cell(ft.Text('Author', weight=ft.FontWeight.BOLD), 150, column_border),
+                    cell(ft.Text('Series', weight=ft.FontWeight.BOLD), 150, column_border),
+                    cell(ft.Text('Sequence #', weight=ft.FontWeight.BOLD), 100, column_border),
+                    cell(ft.Text('Type', weight=ft.FontWeight.BOLD), 80, column_border),
+                    cell(ft.Text('Target', weight=ft.FontWeight.BOLD), 420, column_border),
+                    cell(ft.Text('Target Exists', weight=ft.FontWeight.BOLD), 170, column_border),
+                ], spacing=0)
+            ]
+            for row in rows:
+                review_rows.append(ft.Container(content=ft.Row([
+                    cell(row.item.album, 180),
+                    cell(row.item.author, 150, column_border),
+                    cell(row.item.series, 150, column_border),
+                    cell(row.item.series_sequence, 100, column_border),
+                    cell(row.target.item_type, 80, column_border),
+                    cell(str(row.target.destination_folder if row.target.item_type == 'Folder' else row.target.target_paths[0]), 420, column_border),
+                    cell(row.target_exists, 170, column_border),
+                ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START), border=row_border))
+            dialog=ft.AlertDialog(
+                modal=True,
+                title=ft.Text(title),
+                content=ft.Column(review_rows, scroll=ft.ScrollMode.AUTO, height=500, width=1250, spacing=0),
+                actions=actions,
+            )
+            return dialog
+
+        async def run_duplicate_check(_=None):
+            abs_url=(settings.get('abs_url') or '').strip()
+            api_key=(settings.get('abs_api_key') or '').strip()
+            if not abs_url or not api_key:
+                show_warning('Audiobookshelf not configured', 'Audiobookshelf connection is not configured. Please enter the ABS URL and API key in Settings.')
+                return
+            sync_selected()
+            checkable=[item for item in items if item.checkable]
+            if not checkable:
+                show_status('No checkable ABS library items to duplicate-check.')
+                return
+            progress=ft.AlertDialog(modal=True, title=ft.Text('Checking ABS duplicates...'), content=ft.Column([ft.ProgressRing(), ft.Text('Checking selected/checkable items.')], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER))
+            open_dialog(progress)
+            await asyncio.sleep(0.1)
+            try:
+                for item in checkable:
+                    duplicate=DUPLICATE_NO_MATCH
+                    if item.asin:
+                        asin_matches=await asyncio.to_thread(query_abs_by_asin, abs_url, api_key, item.asin)
+                        if asin_matches:
+                            duplicate=DUPLICATE_ASIN
+                    if duplicate == DUPLICATE_NO_MATCH:
+                        author_album_matches=await asyncio.to_thread(query_abs_by_author_album, abs_url, api_key, item.author, item.album)
+                        if author_album_matches:
+                            duplicate=DUPLICATE_AUTHOR_ALBUM
+                    apply_duplicate_result(item, duplicate)
+                close_dialog(progress)
+                refresh_move_rows()
+                show_status('ABS duplicate check complete.')
+            except AbsApiEndpointError:
+                close_dialog(progress)
+                show_warning('Duplicate check failed', 'Duplicate check failed because an expected Audiobookshelf API endpoint returned 404.')
+            except AbsConnectionError:
+                close_dialog(progress)
+                show_warning('Unable to connect to Audiobookshelf', 'Unable to connect to Audiobookshelf. Please verify the ABS URL and API key in Settings.')
+            except Exception as exc:
+                close_dialog(progress)
+                show_warning('Duplicate check failed', str(exc))
+
+        def show_dry_run(_=None):
+            rows=rows_for_review()
+            dialog=open_review_dialog('Move to ABS Library Dry Run', rows, [ft.TextButton('Close', on_click=lambda e: close_dialog(dialog))])
+            if dialog:
+                open_dialog(dialog)
+
+        async def execute_move(review_dialog, collision_choice):
+            close_dialog(review_dialog)
+            progress=ft.AlertDialog(modal=True, title=ft.Text('Moving to ABS library...'), content=ft.Column([ft.ProgressRing(), ft.Text('Moving selected items. Please wait...')], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER))
+            open_dialog(progress)
+            await asyncio.sleep(0.1)
+            sync_selected()
+            def decide_collision(item, target):
+                return collision_choice
+            report=await asyncio.to_thread(move_items, items, abs_root, decide_collision)
+            close_dialog(progress)
+            summary=(
+                'Move to ABS Library Complete\n\n'
+                f'Items moved successfully: {len(report.moved)}\n'
+                f'Items skipped: {len(report.skipped)}\n'
+                f'Items overwritten: {len(report.overwritten)}\n'
+                f'Items failed: {len(report.failed)}\n'
+                f'Source folders deleted: {len(report.source_folders_deleted)}\n'
+                f'Source folders not deleted because not empty: {len(report.source_folders_not_deleted)}'
+            )
+            details=[]
+            for label, values in (
+                ('Skipped', report.skipped),
+                ('Overwritten', report.overwritten),
+                ('Failed', report.failed),
+                ('Source folders not deleted', report.source_folders_not_deleted),
+                ('Errors', report.errors),
+            ):
+                if values:
+                    details.append(f'{label}:\n' + '\n'.join(values))
+            if details:
+                summary=f'{summary}\n\n' + '\n\n'.join(details)
+            def close_report(e):
+                close_dialog(report_dialog)
+                render()
+            report_dialog=ft.AlertDialog(modal=True, title=ft.Text('Move to ABS Library Complete'), content=ft.Text(summary, selectable=True), actions=[ft.TextButton('OK', on_click=close_report)])
+            open_dialog(report_dialog)
+            show_status(f'Move to ABS library complete: moved {len(report.moved)}, skipped {len(report.skipped)}, failed {len(report.failed)}.')
+
+        def show_start_review(_=None):
+            rows=rows_for_review()
+            if not rows:
+                return
+            has_collision=any(row.target_exists != 'No' for row in rows)
+            def confirm_start(e):
+                close_dialog(review_dialog)
+                actions=[ft.TextButton('Cancel', on_click=lambda e: close_dialog(confirm_dialog))]
+                if has_collision:
+                    actions.extend([
+                        ft.FilledButton('Skip', on_click=lambda e: page.run_task(execute_move, confirm_dialog, COLLISION_SKIP) if hasattr(page, 'run_task') else asyncio.create_task(execute_move(confirm_dialog, COLLISION_SKIP))),
+                        ft.FilledButton('Overwrite', on_click=lambda e: page.run_task(execute_move, confirm_dialog, COLLISION_OVERWRITE) if hasattr(page, 'run_task') else asyncio.create_task(execute_move(confirm_dialog, COLLISION_OVERWRITE))),
+                        ft.FilledButton('Skip All', on_click=lambda e: page.run_task(execute_move, confirm_dialog, COLLISION_SKIP_ALL) if hasattr(page, 'run_task') else asyncio.create_task(execute_move(confirm_dialog, COLLISION_SKIP_ALL))),
+                        ft.FilledButton('Overwrite All', on_click=lambda e: page.run_task(execute_move, confirm_dialog, COLLISION_OVERWRITE_ALL) if hasattr(page, 'run_task') else asyncio.create_task(execute_move(confirm_dialog, COLLISION_OVERWRITE_ALL))),
+                    ])
+                    message='One or more targets already exist. Choose how collisions should be handled for this move operation.'
+                else:
+                    actions.append(ft.FilledButton('Start', on_click=lambda e: page.run_task(execute_move, confirm_dialog, COLLISION_SKIP) if hasattr(page, 'run_task') else asyncio.create_task(execute_move(confirm_dialog, COLLISION_SKIP))))
+                    message='Move the selected items to the configured ABS library root?'
+                confirm_dialog=ft.AlertDialog(modal=True, title=ft.Text('Confirm Move to ABS Library'), content=ft.Text(message), actions=actions)
+                open_dialog(confirm_dialog)
+            review_dialog=open_review_dialog('Move to ABS Library Review', rows, [ft.TextButton('Cancel', on_click=lambda e: close_dialog(review_dialog)), ft.FilledButton('Start', on_click=confirm_start)])
+            if review_dialog:
+                open_dialog(review_dialog)
+
+        refresh_move_rows()
+        page.controls.clear()
+        page.add(
+            ft.Text('Move to ABS Library', size=24, weight=ft.FontWeight.BOLD),
+            ft.Text(f'ABS Library Root: {abs_root}', selectable=True),
+            *( [ft.Text('Scan warnings:\n' + '\n'.join(scan_errors), selectable=True, color=ft.Colors.AMBER)] if scan_errors else [] ),
+            ft.Row([normalize_authors, clean_album_text, ft.Button('Duplicate Check', on_click=lambda e: page.run_task(run_duplicate_check) if hasattr(page, 'run_task') else asyncio.create_task(run_duplicate_check())), ft.Button('Dry Run', on_click=show_dry_run), ft.FilledButton('Start', on_click=show_start_review), ft.TextButton('Cancel', on_click=lambda e: render())], spacing=12, wrap=True),
+            header_row(),
+            table_rows,
+            status,
+        )
+        page.update()
+
     async def run_staging_move(selected, staging_dir: Path, mode: str, move_screen_id: str | None = None):
         ok, message=validate_staging_dir(staging_dir)
         if not ok:
@@ -3187,6 +3448,7 @@ def main(page: ft.Page):
                     'staging_dir': settings.get('staging_dir') or '',
                     'conversion_output_dir': settings.get('conversion_output_dir') or '',
                     'archive_dir': settings.get('archive_dir') or '',
+                    'abs_library_dir': settings.get('abs_library_dir') or '',
                 },
                 'API Settings': {
                     'abs_url': settings.get('abs_url') or '',
@@ -3211,6 +3473,7 @@ def main(page: ft.Page):
                 settings['staging_dir']=values['staging_dir'].strip() or None
                 settings['conversion_output_dir']=values['conversion_output_dir'].strip() or None
                 settings['archive_dir']=values['archive_dir'].strip() or None
+                settings['abs_library_dir']=values['abs_library_dir'].strip() or None
             elif section_name == 'API Settings':
                 settings['abs_url']=values['abs_url'].strip() or None
                 settings['abs_api_key']=values['abs_api_key'].strip() or None
@@ -3242,7 +3505,8 @@ def main(page: ft.Page):
                 staging=ft.TextField(label='Staging Directory', value=staged[name]['staging_dir'], width=520, on_change=lambda e: set_field('staging_dir', e.control.value))
                 conversion_output=ft.TextField(label='Conversion Output Directory', value=staged[name]['conversion_output_dir'], width=520, on_change=lambda e: set_field('conversion_output_dir', e.control.value))
                 archive=ft.TextField(label='Archive Directory', value=staged[name]['archive_dir'], width=520, on_change=lambda e: set_field('archive_dir', e.control.value))
-                fields['working_directory']=working; fields['staging_dir']=staging; fields['conversion_output_dir']=conversion_output; fields['archive_dir']=archive
+                abs_library=ft.TextField(label='ABS Library Directory', value=staged[name]['abs_library_dir'], width=520, on_change=lambda e: set_field('abs_library_dir', e.control.value))
+                fields['working_directory']=working; fields['staging_dir']=staging; fields['conversion_output_dir']=conversion_output; fields['archive_dir']=archive; fields['abs_library_dir']=abs_library
                 async def browse_working(e):
                     picker=create_file_picker()
                     path=await maybe_await(picker.get_directory_path())
@@ -3263,12 +3527,17 @@ def main(page: ft.Page):
                     path=await maybe_await(picker.get_directory_path())
                     if path:
                         archive.value=path; set_field('archive_dir', path); page.update()
+                async def browse_abs_library(e):
+                    picker=create_file_picker()
+                    path=await maybe_await(picker.get_directory_path())
+                    if path:
+                        abs_library.value=path; set_field('abs_library_dir', path); page.update()
                 content.controls.extend([
                     ft.Row([working, ft.Button('Browse', on_click=browse_working)], wrap=True),
                     ft.Row([staging, ft.Button('Browse', on_click=browse_staging)], wrap=True),
                     ft.Row([conversion_output, ft.Button('Browse', on_click=browse_conversion_output)], wrap=True),
                     ft.Row([archive, ft.Button('Browse', on_click=browse_archive)], wrap=True),
-                    ft.TextField(label='Library Directory', value='Reserved for future library move/import features', read_only=True, width=520),
+                    ft.Row([abs_library, ft.Button('Browse', on_click=browse_abs_library)], wrap=True),
                     ft.Row([ft.FilledButton('Save Directories', on_click=lambda e: (save_section(name), render_section(), page.update())), ft.Button('Cancel/Clear', on_click=lambda e: (staged.__setitem__(name, saved(name)), render_section(), page.update()))]),
                 ])
             elif name == 'API Settings':
