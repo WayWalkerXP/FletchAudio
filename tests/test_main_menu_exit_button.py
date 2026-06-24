@@ -25,6 +25,16 @@ def test_exit_app_presents_confirmation_dialog():
     assert 'open_dialog(exit_dialog)' in EXIT_SOURCE
 
 
+def test_exit_app_warns_and_cancels_active_conversion_queue():
+    assert 'if conversion_queue.is_running:' in EXIT_SOURCE
+    assert "title=ft.Text('Conversion Queue Running')" in EXIT_SOURCE
+    assert "terminate the external process where possible" in EXIT_SOURCE
+    assert "ft.FilledButton('Cancel Conversion and Exit', on_click=cancel_conversion_and_exit)" in EXIT_SOURCE
+    assert "ft.TextButton('Keep Running', on_click=lambda _: close_dialog(active_exit_dialog))" in EXIT_SOURCE
+    assert 'conversion_queue.cancel_current()' in EXIT_SOURCE
+    assert 'await close_current_window()' in EXIT_SOURCE
+
+
 def test_confirmed_exit_awaits_current_flet_window_close():
     assert "getattr(page, 'window', None)" in WINDOW_CLOSE_SOURCE
     assert "getattr(window, 'close', None)" in WINDOW_CLOSE_SOURCE

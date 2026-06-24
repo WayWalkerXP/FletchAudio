@@ -145,7 +145,9 @@ from .maintenance import clear_metadata_history, compact_database, database_path
 from .staging import destination_for, discover_staging_candidates, move_to_staging, safe_move_to_staging, validate_staging_dir
 from .manual_edit import BOOLEAN_FIELDS, CoverEditState, MANUAL_EDIT_SOURCE_TYPE, MANUAL_EDIT_TAGS, build_baseline_values, build_manual_metadata_diff, changed_edit_fields, debug_dirty_check, filter_manual_updates_for_file, manual_current_value, manual_edit_file_label, normalize_for_dirty_check, set_debug_dirty_selected_file_path, sorted_manual_edit_files
 from .history_restore import changes_for_group_file, is_restore_supported, list_change_groups_for_file, restore_selected_metadata
+from .conversion_queue import ACTIVE_STATUSES, PENDING_STATUSES, ConversionQueueService, QueueStatus
 from .conversion_runner import run_conversion
+from .conversion_targets import apply_guessed_targets, apply_manual_targets, build_target_state, clone_book_with_targets, format_queue_target, queue_item_dropdown_options, queue_status_color_key
 from .conversion_ui import ConversionUiError, conversion_progress_status, conversion_result_status, prepare_conversion
 logging.basicConfig(level=logging.INFO)
 
@@ -165,6 +167,9 @@ def log_page_state(page: ft.Page, label: str) -> None:
 
 def main(page: ft.Page):
     engine=init_db(); Session=get_session_factory(engine); settings=load_settings(); books=[]
+    conversion_queue=ConversionQueueService()
+    queue_refresh_callback={'fn': None}
+    conversion_queue.subscribe(lambda item: queue_refresh_callback['fn']() if queue_refresh_callback.get('fn') else None)
     log_page_state(page, 'app startup before main window render')
     page.title='FletchAudio'; page.theme_mode=theme_mode_for_setting(settings.get('theme'))
     status=ft.Text('Select a working directory to begin.'); search_field=ft.TextField(label='Search books', hint_text='Search name, album, author, narrator, series, ASIN...', expand=True); filter_dropdown=ft.Dropdown(label='Filter', value='All Books', width=220, options=[ft.dropdown.Option(option) for option in ('All Books', 'Folder Books', 'Single File Books', 'Missing Targets', 'Duplicate Books')]); clear_search_button=ft.Button('Clear Search'); book_list_header=ft.Container(margin=margin_only(right=BOOK_LIST_SCROLLBAR_GAP)); grid=ft.Column(scroll=ft.ScrollMode.AUTO, expand=True); expanded_book_keys=set(); duplicate_statuses={}; current_search_text=''; search_debounce_task=None; url_launcher=ft.UrlLauncher(); audible=AudibleClient(); compact_db_button=ft.Button(content='Compact Database', on_click=None)
@@ -215,10 +220,34 @@ def main(page: ft.Page):
 
     def exit_app(_=None):
         exit_dialog = None
+        active_exit_dialog = None
 
         async def confirm_exit(_):
             close_dialog(exit_dialog)
             await close_current_window()
+
+        async def cancel_conversion_and_exit(_):
+            close_dialog(active_exit_dialog)
+            conversion_queue.cancel_current()
+            await asyncio.sleep(0.1)
+            await close_current_window()
+
+        if conversion_queue.is_running:
+            active_exit_dialog = ft.AlertDialog(
+                modal=True,
+                title=ft.Text('Conversion Queue Running'),
+                content=ft.Text(
+                    'A conversion is currently running. Exiting will cancel the active conversion, '
+                    'terminate the external process where possible, and discard the in-memory queue.'
+                ),
+                actions=[
+                    ft.FilledButton('Cancel Conversion and Exit', on_click=cancel_conversion_and_exit),
+                    ft.TextButton('Keep Running', on_click=lambda _: close_dialog(active_exit_dialog)),
+                    ft.TextButton('Go Back', on_click=lambda _: close_dialog(active_exit_dialog)),
+                ],
+            )
+            open_dialog(active_exit_dialog)
+            return
 
         exit_dialog = ft.AlertDialog(
             modal=True,
@@ -240,6 +269,7 @@ def main(page: ft.Page):
                         ft.Button('Rescan', on_click=lambda _: scan()),
                         ft.Button('Check for Duplicates', on_click=check_for_duplicates),
                         ft.Button('Move to Staging', on_click=show_move_to_staging),
+                        ft.Button('Conversion Queue', on_click=lambda _: show_conversion_queue()),
                     ],
                     spacing=10,
                 ),
@@ -2423,6 +2453,434 @@ def main(page: ft.Page):
 
     def search_or_filter_active():
         return current_book_filter() != 'All Books' or bool(normalized_search_text())
+
+    def show_conversion_queue():
+        nonlocal current_screen
+        current_screen='conversion_queue'
+        page.route='/conversion-queue'
+        selected_checks={}
+        target_states={}
+        target_controls={}
+        queue_rows=ft.Column(scroll=ft.ScrollMode.AUTO, spacing=0)
+        queue_table_width=1290
+        queue_rows_container=ft.Container(
+            content=queue_rows,
+            width=queue_table_width,
+            expand=True,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        )
+        book_rows=ft.Column(scroll=ft.ScrollMode.AUTO, spacing=0)
+        books_container=ft.Container(content=book_rows, height=220, clip_behavior=ft.ClipBehavior.HARD_EDGE)
+        queue_select=ft.Dropdown(label='Queued item', width=420, options=[])
+        queue_status_text=ft.Text('Conversion queue is in memory and resets when the app closes.')
+        bulk_bitrate=ft.Dropdown(label='Target Bitrate', width=160, options=[ft.dropdown.Option(str(value)) for value in sorted(VALID_TARGET_BITRATES, key=int)])
+        bulk_channels=ft.Dropdown(label='Target Channels', width=170, options=[ft.dropdown.Option(str(value)) for value in sorted(VALID_TARGET_CHANNELS, key=int)])
+        divider_color=ft.Colors.OUTLINE_VARIANT
+        row_border=ft.Border(bottom=ft.BorderSide(1, divider_color))
+        column_border=ft.Border(left=ft.BorderSide(1, divider_color))
+        target_bitrate_options=[ft.dropdown.Option('', text='Unset')] + [ft.dropdown.Option(str(value)) for value in sorted(VALID_TARGET_BITRATES, key=int)]
+        target_channel_options=[ft.dropdown.Option('', text='Unset')] + [ft.dropdown.Option(str(value)) for value in sorted(VALID_TARGET_CHANNELS, key=int)]
+
+        def cell(content, width, border=None, padding=8, bgcolor=None):
+            if isinstance(content, str):
+                content=ft.Text(content, selectable=True, width=width - (padding * 2), no_wrap=False)
+            return ft.Container(content=content, width=width, padding=padding, border=border, bgcolor=bgcolor)
+
+        queue_header_height=48
+        queue_row_height=64
+
+        def queue_cell(content, width, border=None, padding=8, bgcolor=None, height=queue_row_height):
+            if isinstance(content, str):
+                content=ft.Text(
+                    content,
+                    selectable=True,
+                    width=width - (padding * 2),
+                    no_wrap=True,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                    tooltip=content,
+                )
+            return ft.Container(
+                content=content,
+                width=width,
+                height=height,
+                padding=padding,
+                border=border,
+                bgcolor=bgcolor,
+                alignment=ft.Alignment(-1, 0),
+            )
+
+        def queue_status_bgcolor(status_value):
+            key=queue_status_color_key(status_value)
+            return {
+                'light_blue': ft.Colors.with_opacity(0.18, ft.Colors.BLUE),
+                'dark_blue': ft.Colors.with_opacity(0.28, ft.Colors.BLUE_900),
+                'light_green': ft.Colors.with_opacity(0.18, ft.Colors.GREEN),
+                'red': ft.Colors.with_opacity(0.18, ft.Colors.RED),
+                'gray': ft.Colors.with_opacity(0.18, ft.Colors.GREY),
+            }.get(key)
+
+        def dropdown_int_value(control):
+            value=str(control.value or '').strip()
+            if not value:
+                return None
+            try:
+                return int(value)
+            except ValueError:
+                return None
+
+        def set_row_targets(book_key, state):
+            target_states[book_key]=state
+            controls=target_controls.get(book_key)
+            if not controls:
+                return
+            controls['bitrate'].value=str(state.target_bitrate or '')
+            controls['channels'].value=str(state.target_channels or '')
+            controls['reason'].value=state.reason
+
+        def queued_book_for_state(book_key):
+            state=target_states[book_key]
+            return clone_book_with_targets(state.book, state.target_bitrate, state.target_channels)
+
+        def output_filename(output_path):
+            raw=str(output_path or '')
+            if not raw:
+                return ''
+            return PureWindowsPath(raw).name if '\\' in raw else Path(raw).name
+
+        def queue_row(item):
+            output=output_filename(item.output_path)
+            message=item.error_text or item.message
+            bgcolor=queue_status_bgcolor(item.status)
+            return ft.Container(content=ft.Row([
+                queue_cell(item.display_title, 240, bgcolor=bgcolor),
+                queue_cell(item.status.value, 120, column_border, bgcolor=bgcolor),
+                queue_cell(item.current_stage, 130, column_border, bgcolor=bgcolor),
+                queue_cell(format_queue_target(item), 110, column_border, bgcolor=bgcolor),
+                queue_cell(output, 300, column_border, bgcolor=bgcolor),
+                queue_cell(message, 390, column_border, bgcolor=bgcolor),
+            ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START), border=row_border, height=queue_row_height)
+
+        queue_header=ft.Container(content=ft.Row([
+            queue_cell(ft.Text('Book', weight=ft.FontWeight.BOLD), 240, height=queue_header_height),
+            queue_cell(ft.Text('Status', weight=ft.FontWeight.BOLD), 120, column_border, height=queue_header_height),
+            queue_cell(ft.Text('Stage', weight=ft.FontWeight.BOLD), 130, column_border, height=queue_header_height),
+            queue_cell(ft.Text('Target', weight=ft.FontWeight.BOLD), 110, column_border, height=queue_header_height),
+            queue_cell(ft.Text('Output', weight=ft.FontWeight.BOLD), 300, column_border, height=queue_header_height),
+            queue_cell(ft.Text('Message', weight=ft.FontWeight.BOLD), 390, column_border, height=queue_header_height),
+        ], spacing=0), height=queue_header_height, width=queue_table_width)
+
+        def refresh_queue_rows():
+            if current_screen != 'conversion_queue':
+                return
+            items=conversion_queue.snapshot()
+            items_by_book_key={item.book_key: item for item in items}
+            queue_rows.controls.clear()
+            if items:
+                queue_rows.controls.extend(queue_row(item) for item in items)
+            else:
+                queue_rows.controls.append(ft.Container(content=ft.Text('No conversion items are queued.'), height=queue_row_height, alignment=ft.Alignment(-1, 0), padding=8))
+            removable=[item for item in items if item.status.value in {'queued', 'ready'}]
+            queue_select.options=[ft.dropdown.Option(key=queue_id, text=title) for queue_id, title in queue_item_dropdown_options(removable)]
+            if queue_select.value not in {item.queue_id for item in removable}:
+                queue_select.value=removable[0].queue_id if removable else None
+            for book in candidates:
+                controls=target_controls.get(book.key)
+                if not controls:
+                    continue
+                item=items_by_book_key.get(book.key)
+                checkbox=controls['checkbox']
+                bitrate_control=controls['bitrate']
+                channels_control=controls['channels']
+                if item is None:
+                    if checkbox.disabled:
+                        checkbox.value=False
+                    checkbox.disabled=False
+                    bitrate_control.disabled=False
+                    channels_control.disabled=False
+                elif item.status in {QueueStatus.FAILED, QueueStatus.CANCELLED}:
+                    checkbox.value=False
+                    checkbox.disabled=False
+                    bitrate_control.disabled=False
+                    channels_control.disabled=False
+                else:
+                    checkbox.value=True
+                    checkbox.disabled=True
+                    editable=item.status in PENDING_STATUSES
+                    bitrate_control.disabled=not editable
+                    channels_control.disabled=not editable
+            running='running' if conversion_queue.is_running else 'idle'
+            queue_status_text.value=f'Queue is {running}. State is in memory and resets when the app closes.'
+            try:
+                page.update()
+            except Exception:
+                logging.debug('Conversion queue UI update failed', exc_info=True)
+
+        try:
+            loop=asyncio.get_running_loop()
+            queue_refresh_callback['fn']=lambda: loop.call_soon_threadsafe(refresh_queue_rows)
+        except RuntimeError:
+            queue_refresh_callback['fn']=refresh_queue_rows
+
+        candidates=filtered_books()
+        for book in candidates:
+            target_states[book.key]=build_target_state(book, bitrate_reader=get_actual_bitrate, channel_reader=get_actual_channels)
+        book_rows.controls.append(ft.Row([
+            cell(ft.Text('Add', weight=ft.FontWeight.BOLD), 70),
+            cell(ft.Text('Book', weight=ft.FontWeight.BOLD), 220, column_border),
+            cell(ft.Text('Detected', weight=ft.FontWeight.BOLD), 150, column_border),
+            cell(ft.Text('Target Bitrate', weight=ft.FontWeight.BOLD), 150, column_border),
+            cell(ft.Text('Target Channels', weight=ft.FontWeight.BOLD), 160, column_border),
+            cell(ft.Text('Reason', weight=ft.FontWeight.BOLD), 240, column_border),
+            cell(ft.Text('Source', weight=ft.FontWeight.BOLD), 360, column_border),
+        ], spacing=0))
+        if candidates:
+            for book in candidates:
+                state=target_states[book.key]
+                checkbox=ft.Checkbox(value=False)
+                selected_checks[book.key]=checkbox
+                bitrate_dropdown=ft.Dropdown(value=str(state.target_bitrate or ''), width=132, options=target_bitrate_options)
+                channels_dropdown=ft.Dropdown(value=str(state.target_channels or ''), width=142, options=target_channel_options)
+                reason_text=ft.Text(state.reason, selectable=True, width=224, no_wrap=False)
+                def on_target_change(e, book_key=book.key, bitrate_dropdown=bitrate_dropdown, channels_dropdown=channels_dropdown):
+                    current=target_states[book_key]
+                    set_row_targets(book_key, apply_manual_targets(current, dropdown_int_value(bitrate_dropdown), dropdown_int_value(channels_dropdown)))
+                    existing=conversion_queue.find_by_book_key(book_key)
+                    if existing is not None and existing.status in PENDING_STATUSES:
+                        conversion_queue.update_book(queued_book_for_state(book_key), settings)
+                    page.update()
+                bitrate_dropdown.on_change=on_target_change
+                channels_dropdown.on_change=on_target_change
+                target_controls[book.key]={'checkbox': checkbox, 'bitrate': bitrate_dropdown, 'channels': channels_dropdown, 'reason': reason_text}
+                book_rows.controls.append(ft.Container(content=ft.Row([
+                    cell(checkbox, 70),
+                    cell(book.display_name, 220, column_border),
+                    cell(state.detected_label, 150, column_border),
+                    cell(bitrate_dropdown, 150, column_border, padding=4),
+                    cell(channels_dropdown, 160, column_border, padding=4),
+                    cell(reason_text, 240, column_border),
+                    cell(str(book.path), 360, column_border),
+                ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.START), border=row_border))
+        else:
+            book_rows.controls.append(ft.Text('No books match the current search/filter.'))
+
+        def selected_books():
+            return [book for book in candidates if selected_checks.get(book.key) and selected_checks[book.key].value and not selected_checks[book.key].disabled]
+
+        def duplicate_status_message(item):
+            if item.status in ACTIVE_STATUSES:
+                return f'{item.display_title} is already being converted.'
+            if item.status == QueueStatus.COMPLETE:
+                return f'{item.display_title} has completed. Remove or clear it before adding it again.'
+            return f'{item.display_title} is already in the queue.'
+
+        def show_duplicate_dialog(book, item, continue_add, summary):
+            state=target_states[book.key]
+            queued_book=clone_book_with_targets(book, state.target_bitrate, state.target_channels)
+            if item.status in PENDING_STATUSES:
+                dialog=ft.AlertDialog(
+                    modal=True,
+                    title=ft.Text('Book already queued'),
+                    content=ft.Text('This book is already in the queue. Do you want to update the queued item with the current target settings?'),
+                    actions=[
+                        ft.TextButton('Update queued item', on_click=lambda e: (conversion_queue.update_book(queued_book, settings), summary.__setitem__('updated', summary['updated'] + 1), close_dialog(dialog), continue_add())),
+                        ft.TextButton('Keep existing', on_click=lambda e: (summary.__setitem__('kept', summary['kept'] + 1), close_dialog(dialog), continue_add())),
+                        ft.TextButton('Cancel', on_click=lambda e: (summary.__setitem__('skipped', summary['skipped'] + 1), close_dialog(dialog), continue_add())),
+                    ],
+                )
+                open_dialog(dialog)
+                return
+            if item.status in {QueueStatus.FAILED, QueueStatus.CANCELLED}:
+                dialog=ft.AlertDialog(
+                    modal=True,
+                    title=ft.Text('Replace queued item?'),
+                    content=ft.Text('This book already has a failed or cancelled queue item. Replace it with the current target settings?'),
+                    actions=[
+                        ft.TextButton('Replace', on_click=lambda e: (conversion_queue.replace_book(queued_book, settings), summary.__setitem__('replaced', summary['replaced'] + 1), close_dialog(dialog), continue_add())),
+                        ft.TextButton('Keep existing', on_click=lambda e: (summary.__setitem__('kept', summary['kept'] + 1), close_dialog(dialog), continue_add())),
+                    ],
+                )
+                open_dialog(dialog)
+                return
+            summary['rejected'].append(duplicate_status_message(item))
+            continue_add()
+
+        def add_summary_message(summary):
+            parts=[]
+            for label, key in (
+                ('Added', 'added'),
+                ('Updated', 'updated'),
+                ('Replaced', 'replaced'),
+                ('Kept', 'kept'),
+                ('Skipped', 'skipped'),
+                ('Failed planning', 'failed'),
+            ):
+                if summary[key]:
+                    parts.append(f'{label}: {summary[key]}')
+            if summary['rejected']:
+                parts.append(f'Rejected: {len(summary["rejected"])}')
+            return 'Conversion queue update complete. ' + (', '.join(parts) if parts else 'No changes.')
+
+        def process_add_books(chosen, index=0, summary=None):
+            if summary is None:
+                summary={'added': 0, 'updated': 0, 'replaced': 0, 'kept': 0, 'skipped': 0, 'failed': 0, 'rejected': []}
+            if index >= len(chosen):
+                refresh_queue_rows()
+                show_status(add_summary_message(summary))
+                return
+            book=chosen[index]
+            existing=conversion_queue.find_by_book_key(book.key)
+            continue_add=lambda: process_add_books(chosen, index + 1, summary)
+            if existing is not None:
+                show_duplicate_dialog(book, existing, continue_add, summary)
+                return
+            state=target_states[book.key]
+            queued_book=clone_book_with_targets(book, state.target_bitrate, state.target_channels)
+            item=conversion_queue.add_books([queued_book], settings)[0]
+            if item.status.value == 'failed':
+                summary['failed'] += 1
+            else:
+                summary['added'] += 1
+            continue_add()
+
+        def add_selected(_=None):
+            chosen=selected_books()
+            if not chosen:
+                show_status('No books selected for conversion queue.')
+                return
+            process_add_books(chosen)
+
+        def set_all_targets(_=None):
+            chosen=selected_books()
+            if not chosen:
+                show_status('No books selected for target update.')
+                return
+            bitrate=dropdown_int_value(bulk_bitrate)
+            channels=dropdown_int_value(bulk_channels)
+            if bitrate is None or channels is None:
+                show_status('Choose both target bitrate and target channels before setting all targets.')
+                return
+            for book in chosen:
+                set_row_targets(book.key, apply_manual_targets(target_states[book.key], bitrate, channels))
+                existing=conversion_queue.find_by_book_key(book.key)
+                if existing is not None and existing.status in PENDING_STATUSES:
+                    conversion_queue.update_book(queued_book_for_state(book.key), settings)
+            show_status(f'Set targets for {len(chosen)} selected book(s).')
+            page.update()
+
+        def guess_selected_targets(_=None):
+            chosen=selected_books()
+            if not chosen:
+                show_status('No books selected for target guessing.')
+                return
+            for book in chosen:
+                set_row_targets(book.key, apply_guessed_targets(target_states[book.key]))
+                existing=conversion_queue.find_by_book_key(book.key)
+                if existing is not None and existing.status in PENDING_STATUSES:
+                    conversion_queue.update_book(queued_book_for_state(book.key), settings)
+            show_status(f'Guessed targets for {len(chosen)} selected book(s).')
+            page.update()
+
+        async def run_queue_background():
+            await asyncio.to_thread(conversion_queue.run_pending)
+            completed=sum(1 for item in conversion_queue.snapshot() if item.status.value == 'complete')
+            show_status(f'Conversion queue finished. Completed: {completed}.')
+            refresh_queue_rows()
+            if completed:
+                scan()
+
+        def start_queue(_=None):
+            if conversion_queue.is_running:
+                show_status('Conversion queue is already running.')
+                return
+            show_status('Conversion queue started in the background.')
+            if hasattr(page, 'run_task'):
+                page.run_task(run_queue_background)
+            else:
+                asyncio.create_task(run_queue_background())
+            start_dialog=ft.AlertDialog(
+                modal=True,
+                title=ft.Text('Queue Started'),
+                content=ft.Text('The conversion queue is now running in the background.\n\nYou may safely return to the main menu while conversions continue.'),
+                actions=[
+                    ft.TextButton('Return to Main', on_click=lambda e: (close_dialog(start_dialog), render())),
+                    ft.TextButton('Stay Here', on_click=lambda e: close_dialog(start_dialog)),
+                ],
+            )
+            open_dialog(start_dialog)
+            refresh_queue_rows()
+
+        def cancel_current(_=None):
+            if conversion_queue.cancel_current():
+                show_status('Cancellation requested for the active conversion.')
+            else:
+                show_status('No active conversion is running.')
+            refresh_queue_rows()
+
+        def remove_selected(_=None):
+            queue_id=queue_select.value
+            if queue_id and conversion_queue.remove_queued(queue_id):
+                show_status('Removed queued conversion item.')
+            else:
+                show_status('Select a queued item that has not started.')
+            refresh_queue_rows()
+
+        def clear_finished(_=None):
+            removed=conversion_queue.clear_terminal()
+            show_status(f'Cleared {removed} completed, failed, or cancelled queue item(s).')
+            refresh_queue_rows()
+
+        header_row=ft.Row([
+                ft.Text('Conversion Queue', size=24, weight=ft.FontWeight.BOLD),
+                ft.Button('Back to Main', on_click=lambda e: render()),
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+        bulk_controls_row=ft.Row([
+                bulk_bitrate,
+                bulk_channels,
+                ft.Button('Set All Targets', on_click=set_all_targets),
+                ft.Button('Guess Targets', on_click=guess_selected_targets),
+            ], spacing=8, wrap=True)
+        books_section=ft.Column([
+            ft.Text('Books'),
+            books_container,
+        ], spacing=4)
+        queue_action_row=ft.Row([
+                ft.FilledButton('Add selected book(s) to queue', disabled=not candidates, on_click=add_selected),
+                ft.FilledButton('Start queue', on_click=start_queue),
+                ft.Button('Cancel current item', on_click=cancel_current),
+                queue_select,
+                ft.Button('Remove queued item', on_click=remove_selected),
+                ft.Button('Clear completed/failed/cancelled items', on_click=clear_finished),
+            ], spacing=8, wrap=True)
+        queue_title_row=ft.Row([
+                ft.Text('Queue', size=20, weight=ft.FontWeight.BOLD),
+                ft.Text(f'Output Directory: {settings.get("conversion_output_dir") or "Not configured"}', selectable=True),
+            ], spacing=16, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        queue_section=ft.Column(
+            controls=[
+                queue_title_row,
+                queue_header,
+                queue_rows_container,
+            ],
+            expand=True,
+            spacing=0,
+        )
+        conversion_queue_screen=ft.Column(
+            controls=[
+                header_row,
+                queue_status_text,
+                bulk_controls_row,
+                books_section,
+                queue_action_row,
+                queue_section,
+                status,
+            ],
+            expand=True,
+            spacing=8,
+        )
+        replace_page_controls(
+            conversion_queue_screen,
+        )
+        refresh_queue_rows()
 
     def update_result_status(rendered_count):
         total_count=len(books)
