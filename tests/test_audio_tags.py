@@ -1,6 +1,6 @@
 from mutagen.mp4 import MP4FreeForm
 
-from metadata_collector.audio_tags import copy_embedded_cover_art, diff_metadata, normalize_tag_value, read_audio_metadata, write_audio_metadata
+from metadata_collector.audio_tags import copy_embedded_cover_art, diff_metadata, normalize_genres, normalize_tag_value, read_audio_metadata, write_audio_metadata
 from metadata_collector.models import AudioFileMetadata
 
 
@@ -244,47 +244,65 @@ def test_copy_embedded_cover_art_between_mp4_files(monkeypatch):
 def test_format_genres_for_tag_list_of_genres():
     from metadata_collector.audio_tags import format_genres_for_tag
 
-    assert format_genres_for_tag(['Literature & Fiction', 'Action & Adventure', 'Mystery, Thriller & Suspense']) == 'Literature & Fiction\\\\Action & Adventure\\\\Mystery, Thriller & Suspense'
+    assert format_genres_for_tag(['Literature & Fiction', 'Action & Adventure', 'Mystery, Thriller & Suspense']) == 'Literature & Fiction, Action & Adventure, Mystery, Thriller & Suspense'
 
 
 def test_format_genres_for_tag_tuple_of_genres():
     from metadata_collector.audio_tags import format_genres_for_tag
 
-    assert format_genres_for_tag(('One', 'Two')) == 'One\\\\Two'
+    assert format_genres_for_tag(('One', 'Two')) == 'One, Two'
 
 
 def test_format_genres_for_tag_list_with_duplicates():
     from metadata_collector.audio_tags import format_genres_for_tag
 
-    assert format_genres_for_tag(['One', 'Two', 'One', 'Two']) == 'One\\\\Two'
+    assert format_genres_for_tag(['One', 'Two', 'One', 'Two']) == 'One, Two'
 
 
 def test_format_genres_for_tag_list_with_empty_values():
     from metadata_collector.audio_tags import format_genres_for_tag
 
-    assert format_genres_for_tag([' One ', '', None, '  ', 'Two']) == 'One\\\\Two'
+    assert format_genres_for_tag([' One ', '', None, '  ', 'Two']) == 'One, Two'
 
 
 def test_format_genres_for_tag_already_formatted_string():
     from metadata_collector.audio_tags import format_genres_for_tag
 
-    assert format_genres_for_tag('One\\\\Two') == 'One\\\\Two'
+    assert format_genres_for_tag('One, Two') == 'One, Two'
 
 
 def test_format_genres_for_tag_upgrades_single_backslash_string():
     from metadata_collector.audio_tags import format_genres_for_tag
 
-    assert format_genres_for_tag('One\\Two') == 'One\\\\Two'
+    assert format_genres_for_tag('One\\Two') == 'One, Two'
+
+
+def test_format_genres_for_tag_upgrades_double_backslash_string():
+    from metadata_collector.audio_tags import format_genres_for_tag
+
+    assert format_genres_for_tag(r'One\\Two') == 'One, Two'
+
+
+def test_format_genres_for_tag_skips_empty_separator_entries():
+    from metadata_collector.audio_tags import format_genres_for_tag
+
+    assert format_genres_for_tag(' One, , Two \\\\  Three ') == 'One, Two, Three'
 
 
 def test_format_genres_for_tag_python_list_looking_string():
     from metadata_collector.audio_tags import format_genres_for_tag
 
-    assert format_genres_for_tag("['Literature & Fiction', 'Action & Adventure', 'Mystery, Thriller & Suspense']") == 'Literature & Fiction\\\\Action & Adventure\\\\Mystery, Thriller & Suspense'
+    assert format_genres_for_tag("['Literature & Fiction', 'Action & Adventure', 'Mystery, Thriller & Suspense']") == 'Literature & Fiction, Action & Adventure, Mystery, Thriller & Suspense'
 
 
 def test_diff_metadata_formats_genre_updates():
-    assert diff_metadata(AudioFileMetadata('/tmp/book.mp3', genres=[]), {'genres': ['One', 'Two']}) == {'genres': 'One\\\\Two'}
+    assert diff_metadata(AudioFileMetadata('/tmp/book.mp3', genres=[]), {'genres': ['One', 'Two']}) == {'genres': 'One, Two'}
+
+
+def test_normalize_genres_reads_existing_backslash_and_comma_formats():
+    assert normalize_genres(r'Fantasy\LitRPG\Adventure') == ['Fantasy', 'LitRPG', 'Adventure']
+    assert normalize_genres('Fantasy, LitRPG, Adventure') == ['Fantasy', 'LitRPG', 'Adventure']
+    assert normalize_genres('') == []
 
 
 def test_write_audio_metadata_formats_mp3_genres(monkeypatch):
@@ -305,7 +323,7 @@ def test_write_audio_metadata_formats_mp3_genres(monkeypatch):
 
     write_audio_metadata('/tmp/book.mp3', {'genres': ['One', 'Two']})
 
-    assert fake_audio.tags['TCON'][0].text == ['One\\\\Two']
+    assert fake_audio.tags['TCON'][0].text == ['One, Two']
 
 
 def test_write_audio_metadata_deletes_mp3_cover(monkeypatch):

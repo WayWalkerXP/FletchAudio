@@ -122,7 +122,7 @@ def test_restore_multiple_selected_tags_normalizes_values():
         MetadataChange(change_group_id=1, book_key='book', file_path='a.mp3', tag_name='explicit', old_value='false', new_value='true', source_type='manual'),
         MetadataChange(change_group_id=1, book_key='book', file_path='a.mp3', tag_name='genres', old_value='Fantasy\\Adventure', new_value='New', source_type='manual'),
     ]
-    assert build_restore_updates(meta, changes) == {'title': 'Old', 'explicit': False, 'genres': 'Fantasy\\\\Adventure'}
+    assert build_restore_updates(meta, changes) == {'title': 'Old', 'explicit': False, 'genres': 'Fantasy, Adventure'}
 
 
 def test_unchecked_tags_are_untouched_by_restore(monkeypatch):

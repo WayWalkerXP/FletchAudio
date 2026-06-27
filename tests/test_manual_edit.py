@@ -40,7 +40,7 @@ def test_manual_edit_unchanged_fields_are_ignored():
 def test_manual_edit_normalizes_genres_before_write():
     current = AudioFileMetadata('/tmp/book.mp3', genres=[])
 
-    assert build_manual_metadata_diff(current, {'genres': r'One\Two'}) == {'genres': r'One\\Two'}
+    assert build_manual_metadata_diff(current, {'genres': r'One\Two'}) == {'genres': 'One, Two'}
 
 
 def test_manual_edit_normalizes_asin():
@@ -117,9 +117,9 @@ def test_folder_manual_updates_exclude_file_level_title_track_disc():
 
 def test_manual_dirty_check_normalizes_unchanged_form_values():
     current = AudioFileMetadata('/tmp/book.mp3', title='Old', author=None, genres=['One', 'Two'], explicit=False, dramatic_audio=True)
-    edited = {'title': ' Old ', 'author': '', 'genres': r'One\\Two', 'explicit': False, 'dramatic_audio': True}
+    edited = {'title': ' Old ', 'author': '', 'genres': 'One, Two', 'explicit': False, 'dramatic_audio': True}
 
-    assert build_current_metadata_values(current)['genres'] == r'One\\Two'
+    assert build_current_metadata_values(current)['genres'] == 'One, Two'
     assert manual_changed_fields(current, edited, CoverEditState()) == {}
     assert not has_manual_unsaved_changes(current, edited, CoverEditState())
 
@@ -136,7 +136,7 @@ def test_new_dirty_helpers_compare_normalized_baseline_and_edit_values():
     current = AudioFileMetadata('/tmp/book.mp3', title=' Chapter 01 ', description='Line 1\r\nLine 2', genres=['One', 'Two'], explicit=False, track=1)
     baseline = build_baseline_values(current)
     edited = dict(baseline)
-    edited.update({'title': 'Chapter 01', 'description': 'Line 1\nLine 2', 'genres': r'One\\Two', 'explicit': False, 'track': '1'})
+    edited.update({'title': 'Chapter 01', 'description': 'Line 1\nLine 2', 'genres': 'One, Two', 'explicit': False, 'track': '1'})
 
     assert normalize_edit_values(baseline) == normalize_edit_values(edited)
     assert changed_edit_fields(baseline, edited, CoverEditState()) == {}
@@ -187,4 +187,4 @@ def test_selected_file_metadata_loading_uses_selected_file_values():
 
     assert manual_current_value(first, 'title') == 'One'
     assert manual_current_value(second, 'title') == 'Two'
-    assert manual_current_value(second, 'genres') == r'B\\C'
+    assert manual_current_value(second, 'genres') == 'B, C'
