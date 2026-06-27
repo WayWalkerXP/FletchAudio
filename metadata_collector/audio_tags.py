@@ -15,7 +15,7 @@ BOOLEAN_FIELDS = {'explicit', 'dramatic_audio'}
 LOGGER = logging.getLogger(__name__)
 
 
-def format_genres_for_tag(genres) -> str | None:
+def normalize_genres(genres) -> list[str]:
     def normalize_many(values):
         out = []
         seen = set()
@@ -27,25 +27,31 @@ def format_genres_for_tag(genres) -> str | None:
                 continue
             out.append(text)
             seen.add(text)
-        return "\\\\".join(out) or None
+        return out
 
     if genres is None:
-        return None
+        return []
     if isinstance(genres, (list, tuple)):
         return normalize_many(genres)
     if isinstance(genres, str):
         text = genres.strip()
         if not text:
-            return None
+            return []
         if text.startswith('[') and text.endswith(']'):
             try:
                 parsed = ast.literal_eval(text)
             except (SyntaxError, ValueError):
-                return genres
+                parsed = None
             if isinstance(parsed, (list, tuple)):
                 return normalize_many(parsed)
-        return re.sub(r'\\+', r'\\\\', text)
-    return str(genres).strip() or None
+        return normalize_many(re.split(r'[\\,]+', text))
+    text = str(genres).strip()
+    return [text] if text else []
+
+
+def format_genres_for_tag(genres) -> str | None:
+    normalized = normalize_genres(genres)
+    return ', '.join(normalized) or None
 
 
 def normalize_tag_value(value):
@@ -182,13 +188,13 @@ def read_audio_metadata(path: str) -> AudioFileMetadata:
         m.narrator=_text(tags,'©wrt','----:com.apple.iTunes:NARRATOR'); m.description=_text(tags,'desc','©cmt')
         m.publisher=_text(tags,'----:com.apple.iTunes:PUBLISHER'); m.published_date=_text(tags,'©day'); m.published_year=(m.published_date or '')[:4] or None
         m.language=_text(tags,'----:com.apple.iTunes:LANGUAGE'); m.series=_text(tags,'----:com.apple.iTunes:SERIES'); m.series_sequence=_text(tags,'----:com.apple.iTunes:SERIES_SEQUENCE','----:com.apple.iTunes:series_sequence','----:com.apple.iTunes:SERIES-PART','----:com.apple.iTunes:series_part')
-        m.asin=_text(tags,'----:com.apple.iTunes:ASIN'); genre=normalize_tag_value(tags.get('©gen')); m.genres=genre.split(', ') if genre else []; m.track=(tags.get('trkn') or [(None,None)])[0][0]; m.disc=(tags.get('disk') or [(None,None)])[0][0]
+        m.asin=_text(tags,'----:com.apple.iTunes:ASIN'); genre=normalize_tag_value(tags.get('©gen')); m.genres=normalize_genres(genre); m.track=(tags.get('trkn') or [(None,None)])[0][0]; m.disc=(tags.get('disk') or [(None,None)])[0][0]
         m.has_cover='covr' in tags; m.cover_data_uri=_mp4_cover_data_uri(tags); m.explicit=_bool_text(_text(tags,'----:com.apple.iTunes:EXPLICIT','----:com.apple.iTunes:explicit')); m.dramatic_audio=_bool_text(_text(tags,'----:com.apple.iTunes:DRAMATIC_AUDIO','----:com.apple.iTunes:dramatic_audio')); m.target_bitrate=_tag_int(_text(tags,'----:com.apple.iTunes:TARGET_BITRATE','----:com.apple.iTunes:target_bitrate')); m.target_channels=_tag_int(_text(tags,'----:com.apple.iTunes:TARGET_CHANNELS','----:com.apple.iTunes:target_channels'))
     else:
         m.title=_text(tags,'TIT2'); m.album=_text(tags,'TALB'); m.author=_text(tags,'TPE1'); m.albumartist=_text(tags,'TPE2'); m.narrator=_text(tags,'TCOM') or _text(tags,'TXXX:NARRATOR')
         m.description=_text(tags,'COMM::XXX','COMM'); m.publisher=_text(tags,'TPUB'); m.published_date=_text(tags,'TDRC'); m.published_year=(m.published_date or '')[:4] or None
         m.language=_text(tags,'TLAN'); m.series=_text(tags,'TXXX:SERIES'); m.series_sequence=_text(tags,'TXXX:SERIES_SEQUENCE','TXXX:series_sequence','TXXX:SERIES-PART','TXXX:series_part'); m.asin=_text(tags,'TXXX:ASIN'); m.explicit=_bool_text(_text(tags,'TXXX:EXPLICIT','TXXX:explicit')); m.dramatic_audio=_bool_text(_text(tags,'TXXX:DRAMATIC_AUDIO','TXXX:dramatic_audio')); m.target_bitrate=_tag_int(_text(tags,'TXXX:TARGET_BITRATE','TXXX:target_bitrate')); m.target_channels=_tag_int(_text(tags,'TXXX:TARGET_CHANNELS','TXXX:target_channels'))
-        g=_text(tags,'TCON'); m.genres=g.split(', ') if g else []; m.track=_int_part(_text(tags,'TRCK')); m.disc=_int_part(_text(tags,'TPOS')); m.has_cover=any(str(k).startswith('APIC') for k in tags.keys()); m.cover_data_uri=_id3_cover_data_uri(tags)
+        g=_text(tags,'TCON'); m.genres=normalize_genres(g); m.track=_int_part(_text(tags,'TRCK')); m.disc=_int_part(_text(tags,'TPOS')); m.has_cover=any(str(k).startswith('APIC') for k in tags.keys()); m.cover_data_uri=_id3_cover_data_uri(tags)
     return m
 
 def _normalize_bool_metadata(value):
