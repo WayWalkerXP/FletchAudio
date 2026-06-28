@@ -65,6 +65,72 @@ def test_write_audio_metadata_filters_non_writable_fields_before_tag_writes(monk
     assert fake_audio.saved is True
 
 
+def test_write_audio_metadata_mirrors_mp4_series_sequence_to_series_part(monkeypatch):
+    import metadata_collector.audio_tags as audio_tags
+
+    class FakeMP4(audio_tags.MP4):
+        def __init__(self):
+            self.tags = {}
+            self.saved = False
+
+        def save(self):
+            self.saved = True
+
+    fake_audio = FakeMP4()
+    monkeypatch.setattr('metadata_collector.audio_tags.File', lambda path, easy=False: fake_audio)
+
+    write_audio_metadata('/tmp/book.m4b', {'series_sequence': '2.5'})
+
+    assert normalize_tag_value(fake_audio.tags['----:com.apple.iTunes:SERIES_SEQUENCE']) == '2.5'
+    assert normalize_tag_value(fake_audio.tags['----:com.apple.iTunes:series-part']) == '2.5'
+    assert fake_audio.saved is True
+
+
+def test_write_audio_metadata_does_not_create_mp4_series_part_for_blank_sequence(monkeypatch):
+    import metadata_collector.audio_tags as audio_tags
+
+    class FakeMP4(audio_tags.MP4):
+        def __init__(self):
+            self.tags = {}
+            self.saved = False
+
+        def save(self):
+            self.saved = True
+
+    fake_audio = FakeMP4()
+    monkeypatch.setattr('metadata_collector.audio_tags.File', lambda path, easy=False: fake_audio)
+
+    write_audio_metadata('/tmp/book.m4b', {'series_sequence': ''})
+
+    assert bytes(fake_audio.tags['----:com.apple.iTunes:SERIES_SEQUENCE'][0]) == b''
+    assert '----:com.apple.iTunes:series-part' not in fake_audio.tags
+    assert fake_audio.saved is True
+
+
+def test_write_audio_metadata_mirrors_id3_series_sequence_to_series_part(monkeypatch):
+    class FakeTags(dict):
+        def setall(self, key, values):
+            self[key] = values
+
+    class FakeAudio:
+        def __init__(self):
+            self.tags = FakeTags()
+            self.saved = False
+
+        def save(self):
+            self.saved = True
+
+    fake_audio = FakeAudio()
+    monkeypatch.setattr('metadata_collector.audio_tags.File', lambda path, easy=False: fake_audio)
+
+    write_audio_metadata('/tmp/book.mp3', {'series_sequence': '2'})
+
+    assert fake_audio.tags['TXXX:SERIES_SEQUENCE'][0].text == ['2']
+    assert fake_audio.tags['TXXX:SERIES-PART'][0].text == ['2']
+    assert fake_audio.tags['TXXX:SERIES-PART'][0].desc == 'SERIES-PART'
+    assert fake_audio.saved is True
+
+
 def test_read_audio_metadata_uses_mp4_series_sequence_tag(monkeypatch):
     import metadata_collector.audio_tags as audio_tags
 

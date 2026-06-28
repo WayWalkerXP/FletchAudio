@@ -13,6 +13,7 @@ from .models import AudioFileMetadata
 NON_WRITABLE_FIELDS = {'duration', 'has_cover', 'cover_data_uri'}
 BOOLEAN_FIELDS = {'explicit', 'dramatic_audio'}
 LOGGER = logging.getLogger(__name__)
+SERIES_PART_FIELD = 'series_part'
 
 
 def normalize_genres(genres) -> list[str]:
@@ -115,6 +116,17 @@ def _bool_text(value):
     if text in {'false', 'no', '0', 'off'}:
         return False
     return None
+
+
+def _has_metadata_value(value) -> bool:
+    return value is not None and value != [] and str(value).strip() != ''
+
+
+def _with_series_part_mirror(updates: dict) -> dict:
+    mirrored = dict(updates)
+    if _has_metadata_value(mirrored.get('series_sequence')):
+        mirrored[SERIES_PART_FIELD] = mirrored['series_sequence']
+    return mirrored
 
 
 def _mime_from_image_data(data, fallback=None):
@@ -227,6 +239,7 @@ def diff_metadata(current: AudioFileMetadata, updates: dict) -> dict:
 
 def write_audio_metadata(path: str, updates: dict):
     updates={k:(format_genres_for_tag(v) if k == 'genres' else v) for k,v in updates.items() if k not in NON_WRITABLE_FIELDS and k != 'cover'}
+    updates=_with_series_part_mirror(updates)
     if not updates:
         return
     audio=File(path, easy=False)
@@ -241,6 +254,7 @@ def write_audio_metadata(path: str, updates: dict):
                 cover_data, mime_type = _read_cover_source(v)
                 tags['covr'] = [MP4Cover(cover_data, imageformat=_cover_format(mime_type))]
             elif k in mapping: tags[mapping[k]]=v if isinstance(v,list) else [str(v)]
+            elif k == SERIES_PART_FIELD: tags['----:com.apple.iTunes:series-part']=[MP4FreeForm(str(v).encode())]
             elif k in {'series','series_sequence','asin','publisher','language','explicit','dramatic_audio','target_bitrate','target_channels'}: tags[f'----:com.apple.iTunes:{k.upper()}']=[MP4FreeForm(str(v).encode())]
             elif k=='track':
                 parsed=_tag_int(v)
@@ -263,6 +277,7 @@ def write_audio_metadata(path: str, updates: dict):
                 tags.add(APIC(encoding=3, mime=mime_type, type=3, desc='Cover', data=cover_data))
             elif k in frame: tags.setall(frame[k].__name__, [frame[k](encoding=3, text=[str(v)])])
             elif k=='description': tags.setall('COMM',[COMM(encoding=3, lang='XXX', desc='', text=str(v))])
+            elif k == SERIES_PART_FIELD: tags.setall('TXXX:SERIES-PART', [TXXX(encoding=3, desc='SERIES-PART', text=[str(v)])])
             else: tags.setall(f'TXXX:{k.upper()}', [TXXX(encoding=3, desc=k.upper(), text=[str(v)])])
     audio.save()
 
