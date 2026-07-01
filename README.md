@@ -1,3 +1,10 @@
+# I made a terrible mistake. 
+
+Flet is a great UI framework, but it is not designed for the type of information dense layout that this project needs. After spending a few days getting familiar with PyQt6, I've come to realize that it's a much better framework that will allow me to implement a more usable UI that will allow the user to work through their books more quickly and efficiently.
+
+I have started working on a new application that uses PyQt, which can be found here -> https://github.com/WayWalkerXP/alchemist
+
+Fortunately, most of the bones of FletchAudio can be brought directly into the new project, so most of the work will simply be building the UI and wiring in the components from FA. Rather than months, it should only take a few weeks to get something usable.  Great things to come!
 # FletchAudio
 
 FletchAudio is a standalone Python/Flet audiobook metadata utility for collecting, reviewing, writing, auditing, and restoring ABS-focused audiobook metadata. Its core logic is split into reusable modules so it can later be integrated into ABS Librarian.
